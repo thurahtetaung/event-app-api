@@ -1,20 +1,18 @@
-import { FastifyInstance } from 'fastify/fastify';
+import { FastifyInstance } from 'fastify';
 import {
   loginUserJSONSchema,
   registerUserJSONSchema,
   verifyRegistrationJSONSchema,
   verifyLoginJSONSchema,
-  updateUserDetailsJSONSchema,
 } from './users.schema';
 import {
   loginUserHandler,
   registerUserHandler,
-  updateUserDetailsHandler,
   verifyLoginHandler,
   verifyRegistrationHandler,
 } from './users.controllers';
 
-export async function userRouter(app: FastifyInstance) {
+export async function userRoutes(app: FastifyInstance) {
   app.get('/', async (request, reply) => {});
 
   app.post(
@@ -47,13 +45,5 @@ export async function userRouter(app: FastifyInstance) {
       schema: verifyLoginJSONSchema,
     },
     verifyLoginHandler,
-  );
-
-  app.post(
-    '/updateProfile',
-    {
-      schema: updateUserDetailsJSONSchema,
-    },
-    updateUserDetailsHandler,
   );
 }

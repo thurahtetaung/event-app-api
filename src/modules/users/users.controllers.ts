@@ -2,14 +2,12 @@ import { FastifyReply, FastifyRequest } from 'fastify';
 import {
   loginUser,
   registerUser,
-  updateUserDetails,
   verifyLogin,
   verifyRegistration,
 } from './users.services';
 import {
   loginUserBodySchema,
   registerUserBodySchema,
-  updateUserDetailsBodySchema,
   verifyLoginBodySchema,
   verifyRegistrationBodySchema,
 } from './users.schema';
@@ -21,18 +19,23 @@ export async function registerUserHandler(
   }>,
   reply: FastifyReply,
 ) {
-  const { email, username, firstName, lastName, role } = request.body;
-  const result = await registerUser({
-    email,
-    username,
-    firstName,
-    lastName,
-    role,
-  });
-  return {
-    message: 'OTP sent',
-    result,
-  };
+  try {
+    const { email, username, role } = request.body;
+    const result = await registerUser({
+      email,
+      username,
+      role,
+    });
+    return reply.code(201).send({
+      message: 'OTP sent',
+      result,
+    });
+  } catch (error) {
+    if (error instanceof Error) {
+      return reply.code(400).send({ message: error.message });
+    }
+    return reply.code(500).send({ message: 'Internal server error' });
+  }
 }
 
 export async function verifyRegistrationHandler(
@@ -41,12 +44,19 @@ export async function verifyRegistrationHandler(
   }>,
   reply: FastifyReply,
 ) {
-  const { email, otp } = request.body;
-  const result = await verifyRegistration({
-    email,
-    otp,
-  });
-  return result;
+  try {
+    const { email, otp } = request.body;
+    const result = await verifyRegistration({
+      email,
+      otp,
+    });
+    return reply.code(200).send(result);
+  } catch (error) {
+    if (error instanceof Error) {
+      return reply.code(400).send({ message: error.message });
+    }
+    return reply.code(500).send({ message: 'Internal server error' });
+  }
 }
 
 export async function loginUserHandler(
@@ -55,14 +65,22 @@ export async function loginUserHandler(
   }>,
   reply: FastifyReply,
 ) {
-  const { email } = request.body;
-  const result = await loginUser({
-    email,
-  });
-  return {
-    message: 'OTP sent',
-    data: result,
-  };
+  try {
+    const { email } = request.body;
+    const result = await loginUser({
+      email,
+    });
+    return reply.code(200).send({
+      message: 'OTP sent',
+      data: result,
+    });
+  } catch (error) {
+    logger.error(`Error logging in user in controller: ${error}`);
+    if (error instanceof Error) {
+      return reply.code(400).send({ message: error.message });
+    }
+    return reply.code(500).send({ message: 'Internal server error' });
+  }
 }
 
 export async function verifyLoginHandler(
@@ -71,37 +89,21 @@ export async function verifyLoginHandler(
   }>,
   reply: FastifyReply,
 ) {
-  const { email, otp } = request.body;
-  const result = await verifyLogin({
-    email,
-    otp,
-  });
-  return {
-    message: 'OTP verified',
-    data: result,
-  };
-}
-
-export async function updateUserDetailsHandler(
-  request: FastifyRequest<{
-    Body: updateUserDetailsBodySchema;
-  }>,
-  reply: FastifyReply,
-) {
-  const { email, username, firstName, lastName, role, userId } = request.body;
-  logger.info(`Updating user details for user ${userId}`);
-  const result = await updateUserDetails(
-    {
+  try {
+    const { email, otp } = request.body;
+    const result = await verifyLogin({
       email,
-      username,
-      firstName,
-      lastName,
-      role,
-    },
-    userId,
-  );
-  return {
-    message: 'User details updated',
-    data: result,
-  };
+      otp,
+    });
+    return reply.code(200).send({
+      message: 'OTP verified',
+      data: result,
+    });
+  } catch (error) {
+    logger.error(`Error verifying login in controller: ${error}`);
+    if (error instanceof Error) {
+      return reply.code(400).send({ message: error.message });
+    }
+    return reply.code(500).send({ message: 'Internal server error' });
+  }
 }

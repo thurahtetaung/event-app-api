@@ -8,27 +8,28 @@ import {
   uuid,
   index,
   unique,
+  uniqueIndex,
 } from 'drizzle-orm/pg-core';
 
 export const userRolesEnum = pgEnum('user_roles', [
   'user',
-  'admin',
   'organizer',
+  'admin',
 ]);
+
+export const countryEnum = pgEnum('country', ['US', 'TH']);
 
 export const users = pgTable(
   'users',
   {
-    id: uuid().primaryKey().defaultRandom(),
-    email: text().notNull().unique(),
-    username: text().notNull().unique(),
-    supabaseUserId: text().unique(),
-    firstName: text().notNull(),
-    lastName: text().notNull(),
-    role: userRolesEnum().default('user').notNull(),
-    verified: boolean().default(false).notNull(),
-    createdAt: timestamp().defaultNow(),
-    updatedAt: timestamp().defaultNow(),
+    id: uuid('id').primaryKey().defaultRandom(),
+    email: text('email').notNull().unique(),
+    username: text('username').notNull().unique(),
+    supabaseUserId: text('supabase_user_id').unique(),
+    role: userRolesEnum('role').notNull().default('user'),
+    verified: boolean('verified').notNull().default(false),
+    createdAt: timestamp('created_at').defaultNow(),
+    updatedAt: timestamp('updated_at').defaultNow(),
   },
   (users) => [
     // Add index for email, username
@@ -44,58 +45,48 @@ export const categories = pgTable('categories', {
   updatedAt: timestamp().defaultNow(),
 });
 
-export const venues = pgTable('venues', {
-  id: uuid().primaryKey().defaultRandom(),
-  name: text().notNull(),
-  address: text().notNull(),
-  capacity: integer().notNull(),
-  isActive: boolean().default(true),
-  bannerUrl: text().default(null),
-  createdAt: timestamp().defaultNow(),
-  updatedAt: timestamp().defaultNow(),
-});
-
 export const events = pgTable(
   'events',
   {
     id: uuid().primaryKey().defaultRandom(),
     name: text().notNull(),
-    description: text().default(null),
+    description: text(),
     organizationId: uuid()
       .notNull()
       .references(() => organizations.id, { onDelete: 'cascade' }),
     capacity: integer().notNull(),
-    categoryId: uuid()
-      .references(() => categories.id)
-      .default(null),
-    venueId: uuid()
-      .references(() => venues.id)
-      .default(null),
+    categoryId: uuid().references(() => categories.id),
     isVirtual: boolean().default(true),
-    bannerUrl: text().default(null),
+    bannerUrl: text(),
+    isPublished: boolean().default(false),
     createdAt: timestamp().defaultNow(),
     startTimestamp: timestamp(),
     endTimestamp: timestamp(),
     updatedAt: timestamp().defaultNow(),
   },
   (events) => [
-    // Add index for organizationId, categoryId, venueId
+    // Add index for organizationId, categoryId
     index().on(events.organizationId),
     index().on(events.categoryId),
-    index().on(events.venueId),
   ],
 );
 
 export const organizations = pgTable(
   'organizations',
   {
-    id: uuid().primaryKey().defaultRandom(),
-    ownerId: uuid().references(() => users.id),
-    name: text().notNull(),
-    description: text().default(null),
-    logoUrl: text().default(null),
-    createdAt: timestamp().defaultNow(),
-    updatedAt: timestamp().defaultNow(),
+    id: uuid('id').primaryKey().defaultRandom(),
+    ownerId: uuid('owner_id').references(() => users.id),
+    name: text('name').notNull(),
+    description: text('description'),
+    website: text('website'),
+    logoUrl: text('logo_url'),
+    country: countryEnum('country').notNull(),
+    stripeAccountId: text('stripe_account_id').unique(),
+    stripeAccountStatus: text('stripe_account_status').default('pending'), // pending, active, inactive
+    stripeAccountCreatedAt: timestamp('stripe_account_created_at'),
+    stripeAccountUpdatedAt: timestamp('stripe_account_updated_at'),
+    createdAt: timestamp('created_at').defaultNow(),
+    updatedAt: timestamp('updated_at').defaultNow(),
   },
   (organizations) => [
     // Add index for ownerId
@@ -111,24 +102,31 @@ export const ticketStatusEnum = pgEnum('ticket_status', [
 export const tickets = pgTable(
   'tickets',
   {
-    name: text().notNull(),
-    seatNumber: text().notNull(),
-    id: uuid().primaryKey().defaultRandom(),
-    eventId: uuid()
+    id: uuid('id').primaryKey().defaultRandom(),
+    eventId: uuid('event_id')
       .notNull()
       .references(() => events.id, { onDelete: 'cascade' }),
-    userId: uuid().references(() => users.id),
-    price: integer().notNull(),
-    status: ticketStatusEnum().default('available'),
-    createdAt: timestamp().defaultNow(),
-    updatedAt: timestamp().defaultNow(),
+    name: text('name').notNull(),
+    seatNumber: text('seat_number').notNull(),
+    price: integer('price').notNull(),
+    currency: text('currency').notNull().default('usd'),
+    status: text('status')
+      .notNull()
+      .default('available')
+      .$type<'available' | 'reserved' | 'booked'>(),
+    userId: uuid('user_id').references(() => users.id),
+    createdAt: timestamp('created_at').defaultNow(),
+    updatedAt: timestamp('updated_at').defaultNow(),
   },
   (tickets) => [
-    // Add index for eventId, userId
+    // Add index for eventId and status
     index().on(tickets.eventId),
-    index().on(tickets.userId),
-    // composite unique constraint for eventId, seatNumber
-    unique().on(tickets.eventId, tickets.seatNumber),
+    index().on(tickets.status),
+    // Add unique constraint for event_id + seat_number combination
+    uniqueIndex('tickets_event_seat_unique').on(
+      tickets.eventId,
+      tickets.seatNumber,
+    ),
   ],
 );
 
@@ -146,7 +144,8 @@ export const orders = pgTable(
     userId: uuid()
       .notNull()
       .references(() => users.id),
-    stripePaymentId: text().notNull(),
+    stripeCheckoutSessionId: text('stripe_checkout_session_id'),
+    stripePaymentIntentId: text('stripe_payment_intent_id'),
     eventId: uuid()
       .notNull()
       .references(() => events.id),
@@ -175,17 +174,40 @@ export const orderItems = pgTable('order_items', {
 
 export const platformConfigurationsEnum = pgEnum(
   'platform_configurations_keys',
-  [
-    'platform_name', // Name of the platform
-    'platform_fee', // Fee charged by the platform in percentage
-    'platform_currency', // Currency of the platform
+  ['platform_name', 'platform_fee'],
+);
+
+export const platformConfigurations = pgTable(
+  'platform_configurations',
+  {
+    id: uuid().primaryKey().defaultRandom(),
+    key: platformConfigurationsEnum().notNull(),
+    value: text().notNull(),
+    createdAt: timestamp().defaultNow(),
+    updatedAt: timestamp().defaultNow(),
+  },
+  // unique constraint for key
+  (platformConfigurations) => [
+    uniqueIndex('platform_configurations_key_unique').on(
+      platformConfigurations.key,
+    ),
   ],
 );
 
-export const platformConfigurations = pgTable('platform_configurations', {
-  id: uuid().primaryKey().defaultRandom(),
-  key: platformConfigurationsEnum().notNull(),
-  value: text().notNull(),
-  createdAt: timestamp().defaultNow(),
-  updatedAt: timestamp().defaultNow(),
+export const organizerApplications = pgTable('organizer_applications', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  userId: uuid('user_id')
+    .references(() => users.id)
+    .notNull(),
+  organizationName: text('organization_name').notNull(),
+  description: text('description').notNull(),
+  website: text('website'),
+  logoUrl: text('logo_url'),
+  country: countryEnum('country').notNull(),
+  status: text('status').notNull().default('pending'), // pending, approved, rejected
+  rejectionReason: text('rejection_reason'),
+  approvedBy: uuid('approved_by').references(() => users.id),
+  approvedAt: timestamp('approved_at'),
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow(),
 });

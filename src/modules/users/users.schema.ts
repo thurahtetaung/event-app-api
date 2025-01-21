@@ -8,21 +8,13 @@ const registerUserBodySchema = z.object({
   username: z.string({
     required_error: 'Username is required',
   }),
-  firstName: z.string({
-    required_error: 'First name is required',
-  }),
-  lastName: z.string({
-    required_error: 'Last name is required',
-  }),
-  role: z.enum(['user', 'admin', 'organizer']).default('user'),
+  role: z.enum(['user', 'organizer', 'admin']).default('user'),
 });
 
 export type registerUserBodySchema = {
   email: string;
   username: string;
-  firstName: string;
-  lastName: string;
-  role: 'user' | 'admin' | 'organizer';
+  role: 'user' | 'organizer' | 'admin';
 };
 
 export const registerUserJSONSchema = {
@@ -80,39 +72,4 @@ export type verifyLoginBodySchema = {
 
 export const verifyLoginJSONSchema = {
   body: zodToJsonSchema(verifyLoginBodySchema, 'verifyLoginBodySchema'),
-};
-
-export const updateUserDetailsBodySchema = z.object({
-  email: z.string({
-    required_error: 'Email is required',
-  }),
-  username: z.string({
-    required_error: 'Username is required',
-  }),
-  firstName: z.string({
-    required_error: 'First name is required',
-  }),
-  lastName: z.string({
-    required_error: 'Last name is required',
-  }),
-  role: z.enum(['user', 'admin', 'organizer']).default('user'),
-  userId: z.string({
-    required_error: 'User ID is required',
-  }),
-});
-
-export type updateUserDetailsBodySchema = {
-  email: string;
-  username: string;
-  firstName: string;
-  lastName: string;
-  role: 'user' | 'admin' | 'organizer';
-  userId: string;
-};
-
-export const updateUserDetailsJSONSchema = {
-  body: zodToJsonSchema(
-    updateUserDetailsBodySchema,
-    'updateUserDetailsBodySchema',
-  ),
 };

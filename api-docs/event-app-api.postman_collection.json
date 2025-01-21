@@ -1,0 +1,792 @@
+{
+  "info": {
+    "name": "Event App API",
+    "description": "API documentation for the Event App",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Auth",
+      "item": [
+        {
+          "name": "Register",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/users/register",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"user@example.com\",\n  \"username\": \"johndoe\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "Register a new user (email, username)"
+          },
+          "response": [
+            {
+              "name": "Success",
+              "status": "201",
+              "body": "{\n  \"message\": \"OTP sent\",\n  \"result\": {\n    \"id\": \"uuid\",\n    \"email\": \"user@example.com\",\n    \"username\": \"johndoe\",\n    \"role\": \"user\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "Verify Registration",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/users/verifyRegistration",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"user@example.com\",\n  \"otp\": \"123456\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "Verify registration OTP"
+          },
+          "response": [
+            {
+              "name": "Success",
+              "status": "200",
+              "body": "{\n  \"id\": \"uuid\",\n  \"email\": \"user@example.com\",\n  \"username\": \"johndoe\",\n  \"role\": \"user\",\n  \"access_token\": \"jwt_token\",\n  \"refresh_token\": \"refresh_token\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "Login",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/users/login",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"user@example.com\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "Login with email (sends OTP)"
+          },
+          "response": [
+            {
+              "name": "Success",
+              "status": "200",
+              "body": "{\n  \"message\": \"OTP sent\",\n  \"data\": {\n    \"email\": \"user@example.com\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "Verify Login",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/users/verifyLogin",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"user@example.com\",\n  \"otp\": \"123456\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "Verify login OTP"
+          },
+          "response": [
+            {
+              "name": "Success",
+              "status": "200",
+              "body": "{\n  \"id\": \"uuid\",\n  \"email\": \"user@example.com\",\n  \"username\": \"johndoe\",\n  \"role\": \"user\",\n  \"access_token\": \"jwt_token\",\n  \"refresh_token\": \"refresh_token\"\n}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Events",
+      "item": [
+        {
+          "name": "Create Event",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/events",
+            "headers": {
+              "Authorization": "Bearer {{accessToken}}"
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Tech Conference 2024\",\n  \"organizationId\": \"org_uuid\",\n  \"capacity\": 1000,\n  \"description\": \"Annual tech conference\",\n  \"categoryId\": \"category_uuid\",\n  \"isVirtual\": true,\n  \"bannerUrl\": \"https://example.com/banner.jpg\",\n  \"startTimestamp\": \"2024-06-01T09:00:00Z\",\n  \"endTimestamp\": \"2024-06-02T17:00:00Z\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "Create a new event (organizer only)"
+          },
+          "response": [
+            {
+              "name": "Success",
+              "status": "201",
+              "body": "{\n  \"id\": \"event_uuid\",\n  \"name\": \"Tech Conference 2024\",\n  \"organizationId\": \"org_uuid\",\n  \"capacity\": 1000,\n  \"description\": \"Annual tech conference\",\n  \"categoryId\": \"category_uuid\",\n  \"isVirtual\": true,\n  \"bannerUrl\": \"https://example.com/banner.jpg\",\n  \"startTimestamp\": \"2024-06-01T09:00:00Z\",\n  \"endTimestamp\": \"2024-06-02T17:00:00Z\",\n  \"isPublished\": false,\n  \"createdAt\": \"2024-01-20T00:00:00Z\",\n  \"updatedAt\": \"2024-01-20T00:00:00Z\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "Get Events",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/events",
+            "description": "Get all events"
+          },
+          "response": [
+            {
+              "name": "Success",
+              "status": "200",
+              "body": "[\n  {\n    \"id\": \"event_uuid\",\n    \"name\": \"Tech Conference 2024\",\n    \"organizationId\": \"org_uuid\",\n    \"capacity\": 1000,\n    \"isPublished\": false\n  }\n]"
+            }
+          ]
+        },
+        {
+          "name": "Get Event by ID",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/events/:id",
+            "description": "Get event by ID"
+          },
+          "response": [
+            {
+              "name": "Success",
+              "status": "200",
+              "body": "{\n  \"id\": \"event_uuid\",\n  \"name\": \"Tech Conference 2024\",\n  \"organizationId\": \"org_uuid\",\n  \"capacity\": 1000,\n  \"isPublished\": false\n}"
+            }
+          ]
+        },
+        {
+          "name": "Update Event",
+          "request": {
+            "method": "PATCH",
+            "url": "{{baseUrl}}/api/events/:id",
+            "headers": {
+              "Authorization": "Bearer {{accessToken}}"
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Updated Tech Conference 2024\",\n  \"capacity\": 1200\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "Update event (organizer only)"
+          },
+          "response": [
+            {
+              "name": "Success",
+              "status": "200",
+              "body": "{\n  \"id\": \"event_uuid\",\n  \"name\": \"Updated Tech Conference 2024\",\n  \"organizationId\": \"org_uuid\",\n  \"capacity\": 1200,\n  \"isPublished\": false\n}"
+            }
+          ]
+        },
+        {
+          "name": "Delete Event",
+          "request": {
+            "method": "DELETE",
+            "url": "{{baseUrl}}/api/events/:id",
+            "headers": {
+              "Authorization": "Bearer {{accessToken}}"
+            },
+            "description": "Delete event (organizer only)"
+          },
+          "response": [
+            {
+              "name": "Success",
+              "status": "200",
+              "body": "{\n  \"message\": \"Event deleted successfully\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "Update Event Publish Status",
+          "request": {
+            "method": "PATCH",
+            "url": "{{baseUrl}}/api/events/:id/publish",
+            "headers": {
+              "Authorization": "Bearer {{accessToken}}"
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"isPublished\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "Update event publish status (organizer only)"
+          },
+          "response": [
+            {
+              "name": "Success",
+              "status": "200",
+              "body": "{\n  \"id\": \"event_uuid\",\n  \"name\": \"Tech Conference 2024\",\n  \"organizationId\": \"org_uuid\",\n  \"capacity\": 1000,\n  \"isPublished\": true\n}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Organizations",
+      "item": [
+        {
+          "name": "Get Organizations",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/organizations",
+            "headers": {
+              "Authorization": "Bearer {{accessToken}}"
+            },
+            "description": "Get all organizations"
+          },
+          "response": [
+            {
+              "name": "Success",
+              "status": "200",
+              "body": "[\n  {\n    \"id\": \"org_uuid\",\n    \"name\": \"Tech Events Inc\",\n    \"description\": \"Tech event organizer\",\n    \"website\": \"https://techevents.com\",\n    \"stripeAccountStatus\": \"active\"\n  }\n]"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Organizer Applications",
+      "item": [
+        {
+          "name": "Create Application",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/organizer-applications",
+            "headers": {
+              "Authorization": "Bearer {{accessToken}}"
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"organizationName\": \"Tech Events Inc\",\n  \"description\": \"Tech event organizer\",\n  \"website\": \"https://techevents.com\", \n \"country\": \"TH\"}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "Create a new application (authenticated)"
+          },
+          "response": [
+            {
+              "name": "Success",
+              "status": "201",
+              "body": "{\n  \"id\": \"app_uuid\",\n  \"userId\": \"user_uuid\",\n  \"status\": \"pending\",\n  \"organizationName\": \"Tech Events Inc\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "Get Applications",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/organizer-applications",
+            "headers": {
+              "Authorization": "Bearer {{accessToken}}"
+            },
+            "description": "Get all applications (admin only)"
+          },
+          "response": [
+            {
+              "name": "Success",
+              "status": "200",
+              "body": "[\n  {\n    \"id\": \"app_uuid\",\n    \"userId\": \"user_uuid\",\n    \"status\": \"pending\",\n    \"organizationName\": \"Tech Events Inc\"\n  }\n]"
+            }
+          ]
+        },
+        {
+          "name": "Get Application by ID",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/organizer-applications/:id",
+            "headers": {
+              "Authorization": "Bearer {{accessToken}}"
+            },
+            "description": "Get application by ID (admin only)"
+          },
+          "response": [
+            {
+              "name": "Success",
+              "status": "200",
+              "body": "{\n  \"id\": \"app_uuid\",\n  \"userId\": \"user_uuid\",\n  \"status\": \"pending\",\n  \"organizationName\": \"Tech Events Inc\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "Update Application Status",
+          "request": {
+            "method": "PATCH",
+            "url": "{{baseUrl}}/api/organizer-applications/:id/status",
+            "headers": {
+              "Authorization": "Bearer {{accessToken}}"
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"approved\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "Update application status (admin only)"
+          },
+          "response": [
+            {
+              "name": "Success",
+              "status": "200",
+              "body": "{\n  \"id\": \"app_uuid\",\n  \"userId\": \"user_uuid\",\n  \"status\": \"approved\",\n  \"organizationName\": \"Tech Events Inc\"\n}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Tickets",
+      "item": [
+        {
+          "name": "Generate Tickets",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/tickets/generate",
+            "headers": {
+              "Authorization": "Bearer {{accessToken}}"
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"eventId\": \"event_uuid\",\n  \"sections\": [\n    {\n      \"name\": \"VIP\",\n      \"price\": 100,\n      \"currency\": \"usd\",\n      \"numberOfSeats\": 50,\n      \"seatNumbering\": {\n        \"type\": \"alphabet\",\n        \"prefix\": \"VIP-\",\n        \"suffix\": \"\"\n      }\n    },\n    {\n      \"name\": \"Regular\",\n      \"price\": 50,\n      \"currency\": \"usd\",\n      \"numberOfSeats\": 100,\n      \"seatNumbering\": {\n        \"type\": \"numbered\",\n        \"startFrom\": 1\n      }\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "Generate tickets for an event (organizer only)"
+          },
+          "response": [
+            {
+              "name": "Success",
+              "status": "201",
+              "body": "[\n  {\n    \"id\": \"ticket_uuid\",\n    \"eventId\": \"event_uuid\",\n    \"name\": \"VIP\",\n    \"seatNumber\": \"VIP-A\",\n    \"price\": 100,\n    \"currency\": \"usd\",\n    \"status\": \"available\",\n    \"createdAt\": \"2024-01-20T00:00:00Z\",\n    \"updatedAt\": \"2024-01-20T00:00:00Z\"\n  }\n]"
+            }
+          ]
+        },
+        {
+          "name": "Purchase Tickets",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/tickets/purchase",
+            "headers": {
+              "Authorization": "Bearer {{accessToken}}"
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"eventId\": \"event_uuid\",\n  \"tickets\": [\n    {\n      \"ticketId\": \"ticket_uuid\",\n      \"seatNumber\": \"VIP-A\"\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "Purchase tickets for an event (authenticated)"
+          },
+          "response": [
+            {
+              "name": "Success",
+              "status": "201",
+              "body": "{\n  \"orderId\": \"order_uuid\",\n  \"clientSecret\": \"pi_secret\",\n  \"amount\": 100,\n  \"currency\": \"usd\"\n}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Stripe",
+      "item": [
+        {
+          "name": "Create Stripe Connect Account",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/stripe/connect",
+            "headers": {
+              "Authorization": "Bearer {{accessToken}}"
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"organizationId\": \"org_uuid\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "Create a Stripe Connect account for an organization (organizer only)"
+          },
+          "response": [
+            {
+              "name": "Success",
+              "status": "200",
+              "body": "{\n  \"organization\": {\n    \"id\": \"org_uuid\",\n    \"stripeAccountId\": \"acct_xxx\",\n    \"stripeAccountStatus\": \"pending\"\n  },\n  \"onboardingUrl\": \"https://connect.stripe.com/setup/xxx\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "Complete Stripe Onboarding",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/stripe/onboard/complete/:organizationId",
+            "headers": {
+              "Authorization": "Bearer {{accessToken}}"
+            },
+            "description": "Complete Stripe Connect onboarding (organizer only)"
+          },
+          "response": [
+            {
+              "name": "Success",
+              "status": "200",
+              "body": "{\n  \"id\": \"org_uuid\",\n  \"stripeAccountId\": \"acct_xxx\",\n  \"stripeAccountStatus\": \"active\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "Refresh Stripe Onboarding",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/stripe/onboard/refresh/:organizationId",
+            "headers": {
+              "Authorization": "Bearer {{accessToken}}"
+            },
+            "description": "Get a new onboarding URL if the previous one expired (organizer only)"
+          },
+          "response": [
+            {
+              "name": "Success",
+              "status": "200",
+              "body": "{\n  \"onboardingUrl\": \"https://connect.stripe.com/setup/xxx\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "Update Stripe Account Status",
+          "request": {
+            "method": "PATCH",
+            "url": "{{baseUrl}}/api/stripe/status",
+            "headers": {
+              "Authorization": "Bearer {{accessToken}}"
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"organizationId\": \"org_uuid\",\n  \"status\": \"active\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "Update Stripe account status (admin only)"
+          },
+          "response": [
+            {
+              "name": "Success",
+              "status": "200",
+              "body": "{\n  \"id\": \"org_uuid\",\n  \"stripeAccountId\": \"acct_xxx\",\n  \"stripeAccountStatus\": \"active\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "Handle Stripe Webhook",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/stripe/webhook",
+            "description": "Handle Stripe webhook events"
+          },
+          "response": [
+            {
+              "name": "Success",
+              "status": "200",
+              "body": "{\n  \"received\": true\n}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Admin",
+      "item": [
+        {
+          "name": "Seed Database",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/admin/seed",
+            "headers": {
+              "Authorization": "Bearer {{accessToken}}"
+            },
+            "description": "Seed the database with test data (admin only)"
+          },
+          "response": [
+            {
+              "name": "Success",
+              "status": "200",
+              "body": "{\n  \"message\": \"Database seeded successfully\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "Nuke Database",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/admin/nuke",
+            "headers": {
+              "Authorization": "Bearer {{accessToken}}"
+            },
+            "description": "Clear all data from the database (admin only)"
+          },
+          "response": [
+            {
+              "name": "Success",
+              "status": "200",
+              "body": "{\n  \"message\": \"Database nuked successfully\"\n}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Categories",
+      "item": [
+        {
+          "name": "Create Category",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/categories",
+            "headers": {
+              "Authorization": "Bearer {{accessToken}}"
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Music\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "Create a new category (admin only)"
+          },
+          "response": [
+            {
+              "name": "Success",
+              "status": "201",
+              "body": "{\n  \"id\": \"category_uuid\",\n  \"name\": \"Music\",\n  \"createdAt\": \"2024-01-20T00:00:00Z\",\n  \"updatedAt\": \"2024-01-20T00:00:00Z\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "Get Categories",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/categories",
+            "description": "Get all categories (public)"
+          },
+          "response": [
+            {
+              "name": "Success",
+              "status": "200",
+              "body": "[\n  {\n    \"id\": \"category_uuid\",\n    \"name\": \"Music\",\n    \"createdAt\": \"2024-01-20T00:00:00Z\",\n    \"updatedAt\": \"2024-01-20T00:00:00Z\"\n  }\n]"
+            }
+          ]
+        },
+        {
+          "name": "Get Category by ID",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/categories/:id",
+            "description": "Get category by ID (public)"
+          },
+          "response": [
+            {
+              "name": "Success",
+              "status": "200",
+              "body": "{\n  \"id\": \"category_uuid\",\n  \"name\": \"Music\",\n  \"createdAt\": \"2024-01-20T00:00:00Z\",\n  \"updatedAt\": \"2024-01-20T00:00:00Z\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "Update Category",
+          "request": {
+            "method": "PUT",
+            "url": "{{baseUrl}}/api/categories/:id",
+            "headers": {
+              "Authorization": "Bearer {{accessToken}}"
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Updated Music\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "Update category (admin only)"
+          },
+          "response": [
+            {
+              "name": "Success",
+              "status": "200",
+              "body": "{\n  \"id\": \"category_uuid\",\n  \"name\": \"Updated Music\",\n  \"createdAt\": \"2024-01-20T00:00:00Z\",\n  \"updatedAt\": \"2024-01-20T00:00:00Z\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "Delete Category",
+          "request": {
+            "method": "DELETE",
+            "url": "{{baseUrl}}/api/categories/:id",
+            "headers": {
+              "Authorization": "Bearer {{accessToken}}"
+            },
+            "description": "Delete category (admin only)"
+          },
+          "response": [
+            {
+              "name": "Success",
+              "status": "200",
+              "body": "{\n  \"id\": \"category_uuid\",\n  \"name\": \"Music\",\n  \"createdAt\": \"2024-01-20T00:00:00Z\",\n  \"updatedAt\": \"2024-01-20T00:00:00Z\"\n}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Platform Configurations",
+      "item": [
+        {
+          "name": "Create Platform Configuration",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/platform-configurations",
+            "headers": {
+              "Authorization": "Bearer {{accessToken}}"
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"key\": \"platform_fee\",\n  \"value\": \"10\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "Create platform configuration (admin only)"
+          },
+          "response": [
+            {
+              "name": "Success",
+              "status": "201",
+              "body": "{\n  \"id\": \"config_uuid\",\n  \"key\": \"platform_fee\",\n  \"value\": \"10\",\n  \"createdAt\": \"2024-01-20T00:00:00Z\",\n  \"updatedAt\": \"2024-01-20T00:00:00Z\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "Get Platform Configurations",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/platform-configurations",
+            "headers": {
+              "Authorization": "Bearer {{accessToken}}"
+            },
+            "description": "Get all platform configurations (authenticated)"
+          },
+          "response": [
+            {
+              "name": "Success",
+              "status": "200",
+              "body": "[\n  {\n    \"id\": \"config_uuid\",\n    \"key\": \"platform_fee\",\n    \"value\": \"10\"\n  }\n]"
+            }
+          ]
+        },
+        {
+          "name": "Get Platform Configuration by Key",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/platform-configurations/:key",
+            "headers": {
+              "Authorization": "Bearer {{accessToken}}"
+            },
+            "description": "Get platform configuration by key (authenticated)"
+          },
+          "response": [
+            {
+              "name": "Success",
+              "status": "200",
+              "body": "{\n  \"id\": \"config_uuid\",\n  \"key\": \"platform_fee\",\n  \"value\": \"10\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "Update Platform Configuration",
+          "request": {
+            "method": "PATCH",
+            "url": "{{baseUrl}}/api/platform-configurations/:key",
+            "headers": {
+              "Authorization": "Bearer {{accessToken}}"
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"value\": \"15\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "Update platform configuration (admin only)"
+          },
+          "response": [
+            {
+              "name": "Success",
+              "status": "200",
+              "body": "{\n  \"id\": \"config_uuid\",\n  \"key\": \"platform_fee\",\n  \"value\": \"15\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "Delete Platform Configuration",
+          "request": {
+            "method": "DELETE",
+            "url": "{{baseUrl}}/api/platform-configurations/:key",
+            "headers": {
+              "Authorization": "Bearer {{accessToken}}"
+            },
+            "description": "Delete platform configuration (admin only)"
+          },
+          "response": [
+            {
+              "name": "Success",
+              "status": "200",
+              "body": "{\n  \"id\": \"config_uuid\",\n  \"key\": \"platform_fee\",\n  \"value\": \"10\"\n}"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

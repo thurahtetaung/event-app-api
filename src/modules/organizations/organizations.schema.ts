@@ -1,19 +1,14 @@
 import { z } from 'zod';
-import { zodToJsonSchema } from 'zod-to-json-schema';
 
-const createOrganizationBodySchema = z.object({
-  name: z.string({
-    required_error: 'Name is required',
-  }),
+export const updateOrganizationSchema = z.object({
+  name: z.string().min(1).optional(),
+  description: z.string().optional(),
+  website: z.string().optional(),
+  logoUrl: z.string().optional(),
 });
 
-export type createOrganizationBodySchema = z.infer<
-  typeof createOrganizationBodySchema
->;
+export type UpdateOrganizationInput = z.infer<typeof updateOrganizationSchema>;
 
-export const createOrganizationJSONSchema = {
-  body: zodToJsonSchema(
-    createOrganizationBodySchema,
-    'createOrganizationBodySchema',
-  ),
+export const updateOrganizationJSONSchema = {
+  body: updateOrganizationSchema,
 };
