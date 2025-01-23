@@ -4,12 +4,15 @@ import {
   registerUser,
   verifyLogin,
   verifyRegistration,
+  resendRegistrationOTP,
+  resendLoginOTP,
 } from './users.services';
 import {
   loginUserBodySchema,
   registerUserBodySchema,
   verifyLoginBodySchema,
   verifyRegistrationBodySchema,
+  resendOTPBodySchema,
 } from './users.schema';
 import { logger } from '../../utils/logger';
 
@@ -101,6 +104,54 @@ export async function verifyLoginHandler(
     });
   } catch (error) {
     logger.error(`Error verifying login in controller: ${error}`);
+    if (error instanceof Error) {
+      return reply.code(400).send({ message: error.message });
+    }
+    return reply.code(500).send({ message: 'Internal server error' });
+  }
+}
+
+export async function resendRegistrationOTPHandler(
+  request: FastifyRequest<{
+    Body: resendOTPBodySchema;
+  }>,
+  reply: FastifyReply,
+) {
+  try {
+    const { email } = request.body;
+    const result = await resendRegistrationOTP({
+      email,
+    });
+    return reply.code(200).send({
+      message: 'OTP resent',
+      data: result,
+    });
+  } catch (error) {
+    logger.error(`Error resending registration OTP in controller: ${error}`);
+    if (error instanceof Error) {
+      return reply.code(400).send({ message: error.message });
+    }
+    return reply.code(500).send({ message: 'Internal server error' });
+  }
+}
+
+export async function resendLoginOTPHandler(
+  request: FastifyRequest<{
+    Body: resendOTPBodySchema;
+  }>,
+  reply: FastifyReply,
+) {
+  try {
+    const { email } = request.body;
+    const result = await resendLoginOTP({
+      email,
+    });
+    return reply.code(200).send({
+      message: 'OTP resent',
+      data: result,
+    });
+  } catch (error) {
+    logger.error(`Error resending login OTP in controller: ${error}`);
     if (error instanceof Error) {
       return reply.code(400).send({ message: error.message });
     }

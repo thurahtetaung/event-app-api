@@ -194,3 +194,68 @@ export async function verifyLogin(data: { email: string; otp: string }) {
     throw new AppError(500, `Failed to verify login: ${e.message}`);
   }
 }
+
+export async function resendRegistrationOTP(data: { email: string }) {
+  try {
+    // Check if user exists and is not verified
+    const user = await db
+      .select({
+        id: users.id,
+        email: users.email,
+        verified: users.verified,
+        role: users.role,
+      })
+      .from(users)
+      .where(eq(users.email, data.email))
+      .limit(1);
+
+    if (user.length === 0) {
+      throw new NotFoundError('User not found');
+    }
+    if (user[0].verified) {
+      throw new ValidationError('User is already verified');
+    }
+
+    // Send new OTP
+    await requestOTP(data.email, { role: user[0].role });
+    return user[0];
+  } catch (e) {
+    logger.error(`Error resending registration OTP: ${e}`);
+    if (e instanceof AppError) {
+      throw e;
+    }
+    throw new AppError(500, `Failed to resend registration OTP: ${e.message}`);
+  }
+}
+
+export async function resendLoginOTP(data: { email: string }) {
+  try {
+    // Check if user exists and is verified
+    const user = await db
+      .select({
+        id: users.id,
+        email: users.email,
+        verified: users.verified,
+      })
+      .from(users)
+      .where(eq(users.email, data.email))
+      .limit(1);
+
+    if (user.length === 0) {
+      throw new NotFoundError('User not found');
+    }
+    if (!user[0].verified) {
+      throw new UnauthorizedError('User not verified');
+    }
+
+    // Send new OTP
+    await requestOTP(data.email);
+    return user[0];
+  } catch (e) {
+    logger.error(`Error resending login OTP: ${e}`);
+    if (e instanceof AppError) {
+      throw e;
+    }
+    throw new AppError(500, `Failed to resend login OTP: ${e.message}`);
+  }
+}

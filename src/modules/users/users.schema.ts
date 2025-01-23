@@ -73,3 +73,17 @@ export type verifyLoginBodySchema = {
 export const verifyLoginJSONSchema = {
   body: zodToJsonSchema(verifyLoginBodySchema, 'verifyLoginBodySchema'),
 };
+
+export const resendOTPBodySchema = z.object({
+  email: z.string({
+    required_error: 'Email is required',
+  }),
+});
+
+export type resendOTPBodySchema = {
+  email: string;
+};
+
+export const resendOTPJSONSchema = {
+  body: zodToJsonSchema(resendOTPBodySchema, 'resendOTPBodySchema'),
+};

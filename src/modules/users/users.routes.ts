@@ -4,12 +4,15 @@ import {
   registerUserJSONSchema,
   verifyRegistrationJSONSchema,
   verifyLoginJSONSchema,
+  resendOTPJSONSchema,
 } from './users.schema';
 import {
   loginUserHandler,
   registerUserHandler,
   verifyLoginHandler,
   verifyRegistrationHandler,
+  resendRegistrationOTPHandler,
+  resendLoginOTPHandler,
 } from './users.controllers';
 
 export async function userRoutes(app: FastifyInstance) {
@@ -32,6 +35,14 @@ export async function userRoutes(app: FastifyInstance) {
   );
 
   app.post(
+    '/resendRegistrationOTP',
+    {
+      schema: resendOTPJSONSchema,
+    },
+    resendRegistrationOTPHandler,
+  );
+
+  app.post(
     '/login',
     {
       schema: loginUserJSONSchema,
@@ -45,5 +56,13 @@ export async function userRoutes(app: FastifyInstance) {
       schema: verifyLoginJSONSchema,
     },
     verifyLoginHandler,
+  );
+
+  app.post(
+    '/resendLoginOTP',
+    {
+      schema: resendOTPJSONSchema,
+    },
+    resendLoginOTPHandler,
   );
 }
