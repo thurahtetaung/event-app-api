@@ -102,14 +102,16 @@ CREATE TABLE "tickets" (
 CREATE TABLE "users" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"email" text NOT NULL,
-	"username" text NOT NULL,
+	"first_name" text NOT NULL,
+	"last_name" text NOT NULL,
+	"date_of_birth" timestamp NOT NULL,
+	"country" text NOT NULL,
 	"supabase_user_id" text,
 	"role" "user_roles" DEFAULT 'user' NOT NULL,
 	"verified" boolean DEFAULT false NOT NULL,
 	"created_at" timestamp DEFAULT now(),
 	"updated_at" timestamp DEFAULT now(),
 	CONSTRAINT "users_email_unique" UNIQUE("email"),
-	CONSTRAINT "users_username_unique" UNIQUE("username"),
 	CONSTRAINT "users_supabase_user_id_unique" UNIQUE("supabase_user_id")
 );
 
@@ -134,4 +136,3 @@ CREATE INDEX "tickets_event_id_index" ON "tickets" USING btree ("event_id");
 CREATE INDEX "tickets_status_index" ON "tickets" USING btree ("status");
 CREATE UNIQUE INDEX "tickets_event_seat_unique" ON "tickets" USING btree ("event_id","seat_number");
 CREATE INDEX "users_email_index" ON "users" USING btree ("email");
-CREATE INDEX "users_username_index" ON "users" USING btree ("username");

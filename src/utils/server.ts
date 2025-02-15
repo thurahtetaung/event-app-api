@@ -1,5 +1,6 @@
 import fastify from 'fastify';
 import fastifyRawBody from 'fastify-raw-body';
+import cors from '@fastify/cors';
 import { pinoLogger } from './logger';
 import { eventRoutes } from '../modules/events/events.routes';
 import { organizationRoutes } from '../modules/organizations/organizations.routes';
@@ -17,6 +18,10 @@ export async function createServer() {
   });
   // register plugins
   server.register(fastifyRawBody);
+  server.register(cors, {
+    origin: process.env.FRONTEND_URL || 'http://localhost:3000',
+    credentials: true,
+  });
   // register routes
   server.register(eventRoutes, { prefix: '/api/events' });
   server.register(organizationRoutes, { prefix: '/api/organizations' });

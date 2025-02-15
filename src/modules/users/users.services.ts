@@ -15,34 +15,40 @@ import {
   UnauthorizedError,
 } from '../../utils/errors';
 
+export async function findUserByEmail(email: string) {
+  const result = await db
+    .select()
+    .from(users)
+    .where(eq(users.email, email))
+    .limit(1);
+  return result[0];
+}
+
 export async function registerUser(data: registerUserBodySchema) {
   try {
-    // First store the user in the database
+    // First check if user already exists
+    const existingUser = await findUserByEmail(data.email);
+    if (existingUser) {
+      throw new ValidationError('Email already exists');
+    }
+
+    // Create user in database
     const result = await createUser(data);
-    // Then send the OTP
-    await requestOTP(data.email, { role: data.role });
+    logger.info(`Now requesting OTP for user: ${data.email}`);
+    // Send the OTP
+    const otpResponse = await requestOTP(data.email, { role: data.role });
+    logger.info(`OTP response: ${otpResponse}`);
     return result;
   } catch (e) {
     logger.error(`Error registering user: ${e}`);
+    if (e instanceof ValidationError) {
+      throw e;
+    }
     if (e.code === '23505') {
-      throw new ValidationError('Email or username already exists');
+      throw new ValidationError('Email already exists');
     }
     throw new AppError(500, `Failed to register user: ${e.message}`);
   }
-}
-
-async function createUser(data: registerUserBodySchema) {
-  const result = await db.insert(users).values(data).returning();
-  return result[0];
-}
-
-async function updateUserVerification(email: string, supabaseUserId: string) {
-  const result = await db
-    .update(users)
-    .set({ verified: true, supabaseUserId, updatedAt: new Date() })
-    .where(eq(users.email, email))
-    .returning();
-  return result[0];
 }
 
 export async function verifyRegistration(data: verifyRegistrationBodySchema) {
@@ -65,7 +71,10 @@ export async function verifyRegistration(data: verifyRegistrationBodySchema) {
       if (existingSuperadmin.length === 0) {
         await createUser({
           email: data.email,
-          username: 'admin',
+          firstName: 'Admin',
+          lastName: 'User',
+          dateOfBirth: new Date().toISOString(),
+          country: 'TH',
           role: 'admin',
         });
       }
@@ -90,56 +99,74 @@ export async function verifyRegistration(data: verifyRegistrationBodySchema) {
   }
 }
 
-export async function getUsers() {
-  try {
-    logger.info('Fetching all users...');
-    const result = await db
-      .select({
-        id: users.id,
-        email: users.email,
-        username: users.username,
-        role: users.role,
-        verified: users.verified,
-      })
-      .from(users);
-
-    logger.debug(`Successfully fetched ${result.length} users`);
-    return result;
-  } catch (error) {
-    logger.error(`Error fetching users: ${error}`);
-    throw new AppError(500, 'Failed to fetch users');
+// Helper function to convert string date to Date object
+function parseDate(dateString: string): Date {
+  const date = new Date(dateString);
+  if (isNaN(date.getTime())) {
+    throw new ValidationError('Invalid date format');
   }
+  return date;
 }
 
-export async function getUserById(userId: string) {
-  try {
-    logger.info(`Fetching user by ID ${userId}`);
-    const result = await db
-      .select({
-        id: users.id,
-        email: users.email,
-        username: users.username,
-        role: users.role,
-        verified: users.verified,
-      })
-      .from(users)
-      .where(eq(users.id, userId))
-      .limit(1);
+export async function createUser(data: registerUserBodySchema) {
+  const userData = {
+    ...data,
+    dateOfBirth: typeof data.dateOfBirth === 'string' ? parseDate(data.dateOfBirth) : data.dateOfBirth,
+  };
+  const result = await db.insert(users).values(userData).returning();
+  return result[0];
+}
 
-    if (!result[0]) {
-      logger.warn(`User not found with ID ${userId}`);
-      throw new NotFoundError(`User not found with ID ${userId}`);
-    }
+export async function updateUserVerification(
+  email: string,
+  supabaseUserId: string,
+) {
+  const result = await db
+    .update(users)
+    .set({
+      supabaseUserId,
+      verified: true,
+    })
+    .where(eq(users.email, email))
+    .returning();
 
-    logger.debug(`User found with ID ${userId}`);
-    return result[0];
-  } catch (error) {
-    if (error instanceof NotFoundError) {
-      throw error;
-    }
-    logger.error(`Error fetching user by ID: ${error}`);
-    throw new AppError(500, 'Failed to fetch user');
+  if (!result.length) {
+    throw new NotFoundError('User not found');
   }
+
+  return result[0];
+}
+
+export async function getUsers() {
+  return db.select().from(users);
+}
+
+export async function getUserById(id: string) {
+  const result = await db
+    .select()
+    .from(users)
+    .where(eq(users.id, id))
+    .limit(1);
+
+  if (!result.length) {
+    throw new NotFoundError('User not found');
+  }
+
+  return result[0];
+}
+
+export async function getUserByEmail(email: string) {
+  const result = await db
+    .select()
+    .from(users)
+    .where(eq(users.email, email))
+    .limit(1);
+
+  if (!result.length) {
+    throw new NotFoundError('User not found');
+  }
+
+  return result[0];
 }
 
 export async function loginUser(data: { email: string }) {
@@ -150,6 +177,7 @@ export async function loginUser(data: { email: string }) {
         id: users.id,
         email: users.email,
         verified: users.verified,
+        role: users.role,
       })
       .from(users)
       .where(eq(users.email, data.email))
@@ -159,7 +187,9 @@ export async function loginUser(data: { email: string }) {
       throw new NotFoundError('User not found');
     }
     if (!user[0].verified) {
-      throw new UnauthorizedError('User not verified');
+      // Instead of blocking login, send registration OTP
+      await requestOTP(data.email, { role: user[0].role });
+      throw new UnauthorizedError('Please complete your registration by verifying your email. A new verification code has been sent.');
     }
 
     // Then send the OTP

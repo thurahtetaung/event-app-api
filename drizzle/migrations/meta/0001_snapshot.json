@@ -1,6 +1,6 @@
 {
-  "id": "e83f425e-df76-4fd4-b634-b174408566e8",
-  "prevId": "00000000-0000-0000-0000-000000000000",
+  "id": "6c277d76-4cbe-4cb5-b11f-652944d4c513",
+  "prevId": "e83f425e-df76-4fd4-b634-b174408566e8",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -438,8 +438,7 @@
         },
         "country": {
           "name": "country",
-          "type": "country",
-          "typeSchema": "public",
+          "type": "text",
           "primaryKey": false,
           "notNull": true
         },
@@ -552,8 +551,21 @@
           "primaryKey": false,
           "notNull": true
         },
+        "organization_type": {
+          "name": "organization_type",
+          "type": "organization_type",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
         "description": {
           "name": "description",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "experience": {
+          "name": "experience",
           "type": "text",
           "primaryKey": false,
           "notNull": true
@@ -570,10 +582,21 @@
           "primaryKey": false,
           "notNull": false
         },
+        "social_links": {
+          "name": "social_links",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "phone_number": {
+          "name": "phone_number",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
         "country": {
           "name": "country",
-          "type": "country",
-          "typeSchema": "public",
+          "type": "text",
           "primaryKey": false,
           "notNull": true
         },
@@ -990,14 +1013,6 @@
     }
   },
   "enums": {
-    "public.country": {
-      "name": "country",
-      "schema": "public",
-      "values": [
-        "US",
-        "TH"
-      ]
-    },
     "public.order_status": {
       "name": "order_status",
       "schema": "public",
@@ -1006,6 +1021,15 @@
         "completed",
         "failed",
         "cancelled"
+      ]
+    },
+    "public.organization_type": {
+      "name": "organization_type",
+      "schema": "public",
+      "values": [
+        "company",
+        "individual",
+        "non_profit"
       ]
     },
     "public.platform_configurations_keys": {

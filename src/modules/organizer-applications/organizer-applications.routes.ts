@@ -10,6 +10,8 @@ import {
   getOrganizerApplicationsHandler,
   getOrganizerApplicationHandler,
   updateOrganizerApplicationStatusHandler,
+  getCurrentUserApplicationHandler,
+  getPendingApplicationsStatsHandler,
 } from './organizer-applications.controllers';
 import { authenticateRequest, checkRole } from '../../middleware/auth';
 import { zodToJsonSchema } from 'zod-to-json-schema';
@@ -28,6 +30,15 @@ export async function organizerApplicationRoutes(app: FastifyInstance) {
       preHandler: [authenticateRequest],
     },
     createOrganizerApplicationHandler,
+  );
+
+  // Get current user's application
+  app.get(
+    '/me',
+    {
+      preHandler: [authenticateRequest],
+    },
+    getCurrentUserApplicationHandler,
   );
 
   // Get all organizer applications (admin only)
@@ -80,5 +91,14 @@ export async function organizerApplicationRoutes(app: FastifyInstance) {
       preHandler: [authenticateRequest, checkRole(['admin'])],
     },
     updateOrganizerApplicationStatusHandler,
+  );
+
+  // Get pending applications statistics (admin only)
+  app.get(
+    '/stats/pending',
+    {
+      preHandler: [authenticateRequest, checkRole(['admin'])],
+    },
+    getPendingApplicationsStatsHandler,
   );
 }

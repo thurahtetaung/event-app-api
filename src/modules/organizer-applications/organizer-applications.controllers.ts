@@ -8,10 +8,12 @@ import {
   getOrganizerApplicationById,
   getOrganizerApplications,
   updateOrganizerApplicationStatus,
-  checkOrganizerApplicationExists,
+  checkPendingOrganizerApplicationExists,
   getOrganizerApplicationByUserId,
+  getPendingApplicationsStats,
 } from './organizer-applications.services';
 import { AppError, NotFoundError } from '../../utils/errors';
+import { logger } from '../../utils/logger';
 
 export async function createOrganizerApplicationHandler(
   request: FastifyRequest<{
@@ -21,7 +23,7 @@ export async function createOrganizerApplicationHandler(
 ) {
   try {
     // Check if user already has an application (using a dedicated check function)
-    const hasExistingApplication = await checkOrganizerApplicationExists(
+    const hasExistingApplication = await checkPendingOrganizerApplicationExists(
       request.user.id,
     );
     if (hasExistingApplication) {
@@ -118,5 +120,21 @@ export async function getCurrentUserApplicationHandler(
       return reply.code(error.statusCode).send({ message: error.message });
     }
     return reply.code(500).send({ message: 'Internal server error' });
+  }
+}
+
+export async function getPendingApplicationsStatsHandler(
+  request: FastifyRequest,
+  reply: FastifyReply,
+) {
+  try {
+    const stats = await getPendingApplicationsStats();
+    return reply.code(200).send(stats);
+  } catch (error) {
+    logger.error(`Error getting pending applications stats: ${error}`);
+    if (error instanceof AppError) {
+      throw error;
+    }
+    throw new AppError(500, 'Failed to get pending applications statistics');
   }
 }

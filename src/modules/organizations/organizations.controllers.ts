@@ -3,7 +3,7 @@ import {
   getOrganizations,
   getOrganizationById,
   updateOrganization,
-  getOrganizationsByOwner,
+  getCurrentOrganization,
 } from './organizations.services';
 import { UpdateOrganizationInput } from './organizations.schema';
 import { logger } from '../../utils/logger';
@@ -47,8 +47,8 @@ export async function getMyOrganizationsHandler(
   reply: FastifyReply,
 ) {
   try {
-    const organizations = await getOrganizationsByOwner(request.user.id);
-    return reply.code(200).send(organizations);
+    const organization = await getCurrentOrganization(request.user.id);
+    return reply.code(200).send(organization || null);
   } catch (error) {
     logger.error(`Error getting user organizations in controller: ${error}`);
     if (error instanceof Error) {

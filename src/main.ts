@@ -40,7 +40,7 @@ async function initializeSuperAdmin() {
     logger.info(`Admin initialization started for email: ${superadminEmail}`);
     logger.info('Please check your email for OTP to complete registration');
   } catch (err) {
-    logger.error('Failed to initialize superadmin:', err);
+    logger.error(`Failed to initialize superadmin: ${err}`);
     // Don't throw the error up, just log it and continue
     return;
   }

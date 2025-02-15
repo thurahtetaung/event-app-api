@@ -6,6 +6,8 @@ import {
   verifyRegistration,
   resendRegistrationOTP,
   resendLoginOTP,
+  findUserByEmail,
+  createUser
 } from './users.services';
 import {
   loginUserBodySchema,
@@ -15,6 +17,28 @@ import {
   resendOTPBodySchema,
 } from './users.schema';
 import { logger } from '../../utils/logger';
+import { AppError } from '../../utils/errors';
+import { users } from '../../db/schema';
+
+interface AuthenticatedRequest extends FastifyRequest {
+  user: typeof users.$inferSelect;
+}
+
+export async function getCurrentUserHandler(
+  request: FastifyRequest,
+  reply: FastifyReply,
+) {
+  try {
+    logger.info(`Getting current user: ${request.user.email}`);
+    return reply.code(200).send(request.user);
+  } catch (error) {
+    logger.error(`Error getting current user: ${error}`);
+    if (error instanceof AppError) {
+      throw error;
+    }
+    throw new AppError(500, 'Failed to get current user');
+  }
+}
 
 export async function registerUserHandler(
   request: FastifyRequest<{
@@ -23,17 +47,10 @@ export async function registerUserHandler(
   reply: FastifyReply,
 ) {
   try {
-    const { email, username, role } = request.body;
-    const result = await registerUser({
-      email,
-      username,
-      role,
-    });
-    return reply.code(201).send({
-      message: 'OTP sent',
-      result,
-    });
+    const result = await registerUser(request.body);
+    return reply.code(200).send(result);
   } catch (error) {
+    logger.error(`Error registering user in controller: ${error}`);
     if (error instanceof Error) {
       return reply.code(400).send({ message: error.message });
     }

@@ -31,7 +31,10 @@ export async function seedDatabase() {
       try {
         await db.insert(users).values({
           email: 'admin@example.com',
-          username: 'admin',
+          firstName: 'Admin',
+          lastName: 'User',
+          dateOfBirth: new Date('1990-01-01'),
+          country: 'TH',
           role: 'admin',
           verified: true,
         });
@@ -90,17 +93,25 @@ export async function seedDatabase() {
         await db.insert(organizations).values([
           {
             name: 'Test Organization 1',
-            description: 'A test organization',
+            organizationType: 'company',
+            description: 'A test organization for event management',
             website: 'https://example.com',
             ownerId: adminUser.id,
+            eventTypes: JSON.stringify(['conference', 'workshop']),
+            address: '123 Test Street, Bangkok',
             country: 'TH',
+            phoneNumber: '+66123456789',
           },
           {
             name: 'Test Organization 2',
-            description: 'Another test organization',
+            organizationType: 'non_profit',
+            description: 'Another test organization for community events',
             website: 'https://example2.com',
             ownerId: adminUser.id,
+            eventTypes: JSON.stringify(['festival', 'exhibition']),
+            address: '456 Sample Road, Bangkok',
             country: 'TH',
+            phoneNumber: '+66987654321',
           },
         ]);
         logger.info('Successfully seeded organizations table');

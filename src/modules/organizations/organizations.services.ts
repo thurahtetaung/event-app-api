@@ -85,12 +85,17 @@ export async function updateOrganization(
     logger.info(`Updating organization ${organizationId} by user ${userId}`);
     await checkOrganizationAccess(userId, organizationId, userRole);
 
+    const { eventTypes, socialLinks, ...restData } = data;
+    const updateData = {
+      ...restData,
+      updatedAt: new Date(),
+      ...(eventTypes && { eventTypes: JSON.stringify(eventTypes) }),
+      ...(socialLinks && { socialLinks: JSON.stringify(socialLinks) }),
+    };
+
     const [updatedOrg] = await db
       .update(organizations)
-      .set({
-        ...data,
-        updatedAt: new Date(),
-      })
+      .set(updateData)
       .where(eq(organizations.id, organizationId))
       .returning();
 
@@ -105,20 +110,21 @@ export async function updateOrganization(
   }
 }
 
-export async function getOrganizationsByOwner(userId: string) {
+export async function getCurrentOrganization(userId: string) {
   try {
-    logger.info(`Fetching organizations for owner ${userId}`);
-    const result = await db
+    logger.info(`Fetching organization for owner ${userId}`);
+    const [organization] = await db
       .select()
       .from(organizations)
-      .where(eq(organizations.ownerId, userId));
+      .where(eq(organizations.ownerId, userId))
+      .limit(1);
 
     logger.debug(
-      `Successfully fetched ${result.length} organizations for owner ${userId}`,
+      `Successfully fetched organization for owner ${userId}`,
     );
-    return result;
+    return organization;
   } catch (error) {
-    logger.error(`Error fetching organizations by owner: ${error}`);
-    throw new AppError(500, 'Failed to fetch organizations');
+    logger.error(`Error fetching organization by owner: ${error}`);
+    throw new AppError(500, 'Failed to fetch organization');
   }
 }

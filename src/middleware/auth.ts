@@ -5,11 +5,18 @@ import { db } from '../db';
 import { users } from '../db/schema';
 import { eq } from 'drizzle-orm';
 import { logger } from '../utils/logger';
+import { UnauthorizedError, ForbiddenError } from '../utils/errors';
 
 interface JWTPayload {
   sub: string;
   email: string;
   role: string;
+}
+
+declare module 'fastify' {
+  interface FastifyRequest {
+    user: typeof users.$inferSelect;
+  }
 }
 
 export async function authenticateRequest(
@@ -19,7 +26,7 @@ export async function authenticateRequest(
   try {
     const token = request.headers.authorization?.split(' ')[1];
     if (!token) {
-      return reply.code(401).send({ message: 'Unauthorized' });
+      throw new UnauthorizedError('No token provided');
     }
 
     const decoded = jwt.verify(token, env.JWT_SECRET) as {
@@ -27,7 +34,8 @@ export async function authenticateRequest(
       email: string;
       role: string;
     };
-    logger.info(`Current user: ${JSON.stringify(decoded)}`);
+    logger.info(`Authenticating user: ${decoded.email}`);
+
     const user = await db
       .select()
       .from(users)
@@ -35,27 +43,42 @@ export async function authenticateRequest(
       .limit(1);
 
     if (!user.length) {
-      return reply.code(401).send({ message: 'Unauthorized' });
+      throw new UnauthorizedError('User not found');
     }
 
-    request.user = {
-      id: user[0].id,
-      email: user[0].email,
-      role: user[0].role,
-    };
+    request.user = user[0];
   } catch (error) {
-    return reply.code(401).send({ message: 'Unauthorized' });
+    logger.error(`Authentication error: ${error}`);
+    if (error instanceof jwt.JsonWebTokenError) {
+      throw new UnauthorizedError('Invalid token');
+    }
+    if (error instanceof UnauthorizedError) {
+      throw error;
+    }
+    throw new UnauthorizedError('Authentication failed');
   }
 }
 
 export function checkRole(roles: string[]) {
   return async (request: FastifyRequest, reply: FastifyReply) => {
-    // Allow admins to do anything organizers can do
-    if (request.user.role === 'admin') {
-      return;
-    }
-    if (!roles.includes(request.user.role)) {
-      return reply.code(403).send({ message: 'Forbidden' });
+    try {
+      if (!request.user) {
+        throw new UnauthorizedError('User not authenticated');
+      }
+
+      // Allow admins to do anything organizers can do
+      if (request.user.role === 'admin') {
+        return;
+      }
+      if (!roles.includes(request.user.role)) {
+        throw new ForbiddenError('Insufficient permissions');
+      }
+    } catch (error) {
+      logger.error(`Role check error: ${error}`);
+      if (error instanceof UnauthorizedError || error instanceof ForbiddenError) {
+        throw error;
+      }
+      throw new ForbiddenError('Permission check failed');
     }
   };
 }

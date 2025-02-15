@@ -5,15 +5,27 @@ const registerUserBodySchema = z.object({
   email: z.string({
     required_error: 'Email is required',
   }),
-  username: z.string({
-    required_error: 'Username is required',
+  firstName: z.string({
+    required_error: 'First name is required',
+  }),
+  lastName: z.string({
+    required_error: 'Last name is required',
+  }),
+  dateOfBirth: z.string({
+    required_error: 'Date of birth is required',
+  }),
+  country: z.string({
+    required_error: 'Country is required',
   }),
   role: z.enum(['user', 'organizer', 'admin']).default('user'),
 });
 
 export type registerUserBodySchema = {
   email: string;
-  username: string;
+  firstName: string;
+  lastName: string;
+  dateOfBirth: string;
+  country: string;
   role: 'user' | 'organizer' | 'admin';
 };
 

@@ -17,14 +17,32 @@ export const userRolesEnum = pgEnum('user_roles', [
   'admin',
 ]);
 
-export const countryEnum = pgEnum('country', ['US', 'TH']);
+export const organizationTypeEnum = pgEnum('organization_type', [
+  'company',
+  'individual',
+  'non_profit',
+]);
+
+export const eventTypesEnum = pgEnum('event_types', [
+  'conference',
+  'workshop',
+  'concert',
+  'exhibition',
+  'sports',
+  'networking',
+  'festival',
+  'corporate',
+]);
 
 export const users = pgTable(
   'users',
   {
     id: uuid('id').primaryKey().defaultRandom(),
     email: text('email').notNull().unique(),
-    username: text('username').notNull().unique(),
+    firstName: text('first_name').notNull(),
+    lastName: text('last_name').notNull(),
+    dateOfBirth: timestamp('date_of_birth').notNull(),
+    country: text('country').notNull(),
     supabaseUserId: text('supabase_user_id').unique(),
     role: userRolesEnum('role').notNull().default('user'),
     verified: boolean('verified').notNull().default(false),
@@ -32,9 +50,8 @@ export const users = pgTable(
     updatedAt: timestamp('updated_at').defaultNow(),
   },
   (users) => [
-    // Add index for email, username
+    // Add index for email
     index().on(users.email),
-    index().on(users.username),
   ],
 );
 
@@ -75,12 +92,19 @@ export const organizations = pgTable(
   'organizations',
   {
     id: uuid('id').primaryKey().defaultRandom(),
-    ownerId: uuid('owner_id').references(() => users.id),
+    ownerId: uuid('owner_id')
+      .references(() => users.id)
+      .notNull(),
     name: text('name').notNull(),
-    description: text('description'),
+    organizationType: organizationTypeEnum('organization_type').notNull(),
+    description: text('description').notNull(),
     website: text('website'),
     logoUrl: text('logo_url'),
-    country: countryEnum('country').notNull(),
+    socialLinks: text('social_links'), // JSON string of social media links
+    phoneNumber: text('phone_number'),
+    eventTypes: text('event_types').notNull(), // JSON array of event types
+    address: text('address').notNull(),
+    country: text('country').notNull(),
     stripeAccountId: text('stripe_account_id').unique(),
     stripeAccountStatus: text('stripe_account_status').default('pending'), // pending, active, inactive
     stripeAccountCreatedAt: timestamp('stripe_account_created_at'),
@@ -200,10 +224,16 @@ export const organizerApplications = pgTable('organizer_applications', {
     .references(() => users.id)
     .notNull(),
   organizationName: text('organization_name').notNull(),
+  organizationType: organizationTypeEnum('organization_type').notNull(),
   description: text('description').notNull(),
+  experience: text('experience').notNull(),
   website: text('website'),
   logoUrl: text('logo_url'),
-  country: countryEnum('country').notNull(),
+  socialLinks: text('social_links'), // JSON string of social media links
+  phoneNumber: text('phone_number'),
+  eventTypes: text('event_types').notNull(), // JSON array of event types
+  address: text('address').notNull(),
+  country: text('country').notNull(),
   status: text('status').notNull().default('pending'), // pending, approved, rejected
   rejectionReason: text('rejection_reason'),
   approvedBy: uuid('approved_by').references(() => users.id),

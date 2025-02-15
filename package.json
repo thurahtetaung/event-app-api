@@ -41,6 +41,7 @@
   "author": "Thura Htet Aung",
   "license": "MIT",
   "dependencies": {
+    "@fastify/cors": "^10.0.2",
     "@supabase/supabase-js": "^2.47.12",
     "argon2": "^0.41.1",
     "drizzle-orm": "^0.38.3",

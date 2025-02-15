@@ -1,4 +1,4 @@
-import { eq, and } from 'drizzle-orm';
+import { eq, and, desc, gte } from 'drizzle-orm';
 import { db } from '../../db';
 import { organizerApplications, users, organizations } from '../../db/schema';
 import {
@@ -26,10 +26,11 @@ export async function createOrganizerApplication(
     logger.info(`Creating organizer application for user ${userId}`);
     logger.debug(`Application data: ${JSON.stringify(input)}`);
 
-    // Get user email
+    // Get user email and country
     const user = await db
       .select({
         email: users.email,
+        country: users.country,
       })
       .from(users)
       .where(eq(users.id, userId))
@@ -39,13 +40,29 @@ export async function createOrganizerApplication(
       throw new NotFoundError(`User not found with ID ${userId}`);
     }
 
+    // Transform the input to match our database schema
+    const applicationData = {
+      userId,
+      organizationName: input.organizationName,
+      organizationType: input.organizationType,
+      description: input.description,
+      experience: input.experience,
+      website: input.website || null,
+      eventTypes: JSON.stringify(input.eventTypes), // Convert array to JSON string
+      phoneNumber: input.phoneNumber,
+      address: input.address,
+      socialLinks: JSON.stringify(input.socialLinks), // Convert object to JSON string
+      country: user[0].country, // Use user's country
+      status: 'pending' as const,
+      logoUrl: null, // Optional field
+      rejectionReason: null, // Optional field
+      approvedBy: null, // Optional field
+      approvedAt: null, // Optional field
+    };
+
     const application = await db
       .insert(organizerApplications)
-      .values({
-        userId,
-        ...input,
-        status: 'pending',
-      })
+      .values(applicationData)
       .returning();
 
     // Send confirmation email
@@ -68,17 +85,23 @@ export async function createOrganizerApplication(
       );
     }
 
+    // Parse JSON strings back to objects for the response
+    const responseData = {
+      ...application[0],
+      eventTypes: JSON.parse(application[0].eventTypes),
+      socialLinks: application[0].socialLinks ? JSON.parse(application[0].socialLinks) : null,
+    };
+
     logger.info(
       `Successfully created organizer application with ID ${application[0].id}`,
     );
-    return application[0];
+    return responseData;
   } catch (error) {
     logger.error(`Error creating organizer application: ${error}`);
-    logger.debug('Failed application data:', { userId, ...input });
-    throw new AppError(
-      500,
-      `Failed to create organizer application: ${error.message}`,
-    );
+    if (error instanceof AppError) {
+      throw error;
+    }
+    throw new AppError(500, 'Failed to create organizer application');
   }
 }
 
@@ -86,17 +109,20 @@ export async function getOrganizerApplications() {
   try {
     logger.info('Fetching all organizer applications');
 
-    // Join with users to get applicant details
+    // Join with users to get applicant details and sort by createdAt in descending order
     const applications = await db
       .select({
         application: organizerApplications,
         applicant: {
           id: users.id,
           email: users.email,
+          firstName: users.firstName,
+          lastName: users.lastName,
         },
       })
       .from(organizerApplications)
-      .leftJoin(users, eq(organizerApplications.userId, users.id));
+      .leftJoin(users, eq(organizerApplications.userId, users.id))
+      .orderBy(desc(organizerApplications.createdAt));
 
     logger.info(
       `Successfully fetched ${applications.length} organizer applications`,
@@ -118,6 +144,8 @@ export async function getOrganizerApplicationById(id: string) {
         applicant: {
           id: users.id,
           email: users.email,
+          firstName: users.firstName,
+          lastName: users.lastName,
         },
       })
       .from(organizerApplications)
@@ -205,11 +233,16 @@ export async function updateOrganizerApplicationStatus(
         // Create organization
         await tx.insert(organizations).values({
           name: application.application.organizationName,
-          description: application.application.description,
-          website: application.application.website,
-          logoUrl: application.application.logoUrl,
-          country: application.application.country,
           ownerId: application.application.userId,
+          organizationType: application.application.organizationType,
+          description: application.application.description,
+          website: application.application.website || undefined,
+          logoUrl: undefined, // logoUrl is not in organizer application
+          socialLinks: application.application.socialLinks,
+          phoneNumber: application.application.phoneNumber,
+          eventTypes: application.application.eventTypes,
+          address: application.application.address,
+          country: application.application.country,
         });
       }
 
@@ -260,44 +293,79 @@ export async function updateOrganizerApplicationStatus(
 
 export async function getOrganizerApplicationByUserId(userId: string) {
   try {
-    logger.info(`Fetching organizer application for user ${userId}`);
+    logger.info(`Fetching organizer applications for user ${userId}`);
 
     const applications = await db
       .select()
       .from(organizerApplications)
       .where(eq(organizerApplications.userId, userId))
-      .limit(1);
-
-    if (!applications[0]) {
-      logger.debug(`No organizer application found for user ${userId}`);
-      throw new NotFoundError(
-        `No organizer application found for user ${userId}`,
-      );
-    }
+      .orderBy(desc(organizerApplications.createdAt));
 
     logger.info(
-      `Successfully fetched organizer application for user ${userId}`,
+      `Successfully fetched ${applications.length} applications for user ${userId}`,
     );
-    return applications[0];
+    return applications;
   } catch (error) {
     logger.error(
-      `Error fetching organizer application for user ${userId}: ${error}`,
+      `Error fetching organizer applications for user ${userId}: ${error}`,
     );
     if (error instanceof AppError) {
       throw error;
     }
-    throw new AppError(500, 'Failed to fetch organizer application');
+    throw new AppError(500, 'Failed to fetch organizer applications');
   }
 }
 
-export async function checkOrganizerApplicationExists(
+export async function checkPendingOrganizerApplicationExists(
   userId: string,
 ): Promise<boolean> {
   const result = await db
     .select({ id: organizerApplications.id })
     .from(organizerApplications)
-    .where(eq(organizerApplications.userId, userId))
+    .where(and(eq(organizerApplications.userId, userId), eq(organizerApplications.status, 'pending')))
     .limit(1);
 
   return result.length > 0;
+}
+
+export async function getPendingApplicationsStats() {
+  try {
+    logger.info('Fetching pending applications statistics');
+
+    const today = new Date()
+    today.setHours(0, 0, 0, 0)
+    const yesterday = new Date(today)
+    yesterday.setDate(yesterday.getDate() - 1)
+
+    const [totalPending, newSinceYesterday] = await Promise.all([
+      // Get total pending count
+      db
+        .select({ id: organizerApplications.id })
+        .from(organizerApplications)
+        .where(eq(organizerApplications.status, 'pending'))
+        .then(results => results.length),
+
+      // Get count of applications created since yesterday
+      db
+        .select({ id: organizerApplications.id })
+        .from(organizerApplications)
+        .where(and(
+          eq(organizerApplications.status, 'pending'),
+          gte(organizerApplications.createdAt, yesterday)
+        ))
+        .then(results => results.length)
+    ])
+
+    logger.info(
+      `Successfully fetched pending applications stats: total=${totalPending}, new=${newSinceYesterday}`,
+    );
+
+    return {
+      total: totalPending,
+      newSinceYesterday
+    };
+  } catch (error) {
+    logger.error(`Error fetching pending applications stats: ${error}`);
+    throw new AppError(500, 'Failed to fetch pending applications statistics');
+  }
 }

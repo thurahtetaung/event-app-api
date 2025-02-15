@@ -13,10 +13,16 @@ import {
   verifyRegistrationHandler,
   resendRegistrationOTPHandler,
   resendLoginOTPHandler,
+  getCurrentUserHandler
 } from './users.controllers';
+import { authenticateRequest } from '../../middleware/auth';
 
 export async function userRoutes(app: FastifyInstance) {
   app.get('/', async (request, reply) => {});
+
+  app.get('/me', {
+    onRequest: [authenticateRequest],
+  }, getCurrentUserHandler);
 
   app.post(
     '/register',

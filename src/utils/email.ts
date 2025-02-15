@@ -62,7 +62,16 @@ export const organizerApplicationTemplate = ({
             Your application has been <strong style="color: ${statusColor}">${status}</strong>.
           </p>
 
-          ${message ? `<p style="margin-bottom: 16px;">${message}</p>` : ''}
+          ${
+            !isApproved && message
+              ? `
+                <div style="background-color: #fef2f2; border: 1px solid #fee2e2; border-radius: 6px; padding: 16px; margin-bottom: 16px;">
+                  <h3 style="color: #991b1b; margin-top: 0; margin-bottom: 8px; font-size: 16px;">Reason for Rejection:</h3>
+                  <p style="color: #7f1d1d; margin: 0;">${message}</p>
+                </div>
+              `
+              : ''
+          }
 
           ${
             isApproved
