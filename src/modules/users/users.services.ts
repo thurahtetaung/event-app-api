@@ -1,7 +1,7 @@
 import { eq } from 'drizzle-orm';
 import { db } from '../../db';
 import { users } from '../../db/schema';
-import { requestOTP, verifyOTP } from '../../services/supabase/auth';
+import { requestOTP, verifyOTP, refreshSession } from '../../services/supabase/auth';
 import {
   registerUserBodySchema,
   verifyRegistrationBodySchema,
@@ -287,5 +287,45 @@ export async function resendLoginOTP(data: { email: string }) {
       throw e;
     }
     throw new AppError(500, `Failed to resend login OTP: ${e.message}`);
+  }
+}
+
+export async function refreshToken(refreshToken: string) {
+  try {
+    logger.info('Refresh token request received');
+
+    // Attempt to refresh the session
+    const session = await refreshSession(refreshToken);
+
+    if (!session) {
+      logger.error('No session returned after refresh');
+      throw new UnauthorizedError('Invalid refresh token');
+    }
+
+    if (!session.access_token || !session.refresh_token) {
+      logger.error('Session missing required tokens');
+      throw new UnauthorizedError('Invalid session data');
+    }
+
+    logger.info('Token refresh successful');
+    return {
+      access_token: session.access_token,
+      refresh_token: session.refresh_token,
+    };
+  } catch (error: any) {
+    logger.error(`Error refreshing token: ${error.message}`);
+
+    // Handle specific Supabase error cases
+    if (error.message?.includes('Token expired') ||
+        error.message?.includes('Invalid refresh token') ||
+        error.message?.includes('Already used')) {
+      throw new UnauthorizedError('Session expired. Please log in again.');
+    }
+
+    if (error instanceof UnauthorizedError) {
+      throw error;
+    }
+
+    throw new AppError(500, 'Failed to refresh session. Please try again.');
   }
 }

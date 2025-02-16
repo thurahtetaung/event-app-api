@@ -13,7 +13,8 @@ import {
   verifyRegistrationHandler,
   resendRegistrationOTPHandler,
   resendLoginOTPHandler,
-  getCurrentUserHandler
+  getCurrentUserHandler,
+  refreshTokenHandler
 } from './users.controllers';
 import { authenticateRequest } from '../../middleware/auth';
 
@@ -70,5 +71,22 @@ export async function userRoutes(app: FastifyInstance) {
       schema: resendOTPJSONSchema,
     },
     resendLoginOTPHandler,
+  );
+
+  // Refresh token
+  app.post<{ Body: { refresh_token: string } }>(
+    '/refresh-token',
+    {
+      schema: {
+        body: {
+          type: 'object',
+          required: ['refresh_token'],
+          properties: {
+            refresh_token: { type: 'string' },
+          },
+        },
+      },
+    },
+    refreshTokenHandler,
   );
 }

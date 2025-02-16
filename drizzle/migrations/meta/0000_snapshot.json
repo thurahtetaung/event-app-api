@@ -1,5 +1,5 @@
 {
-  "id": "e83f425e-df76-4fd4-b634-b174408566e8",
+  "id": "e5471b94-9f7f-430d-b1c2-4a1b610788cd",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -55,8 +55,8 @@
           "notNull": true,
           "default": "gen_random_uuid()"
         },
-        "name": {
-          "name": "name",
+        "title": {
+          "name": "title",
           "type": "text",
           "primaryKey": false,
           "notNull": true
@@ -67,11 +67,42 @@
           "primaryKey": false,
           "notNull": false
         },
-        "organization_id": {
-          "name": "organization_id",
-          "type": "uuid",
+        "start_timestamp": {
+          "name": "start_timestamp",
+          "type": "timestamp",
           "primaryKey": false,
           "notNull": true
+        },
+        "end_timestamp": {
+          "name": "end_timestamp",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "venue": {
+          "name": "venue",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "address": {
+          "name": "address",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "category": {
+          "name": "category",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "is_online": {
+          "name": "is_online",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": false,
+          "default": false
         },
         "capacity": {
           "name": "capacity",
@@ -79,31 +110,25 @@
           "primaryKey": false,
           "notNull": true
         },
-        "category_id": {
-          "name": "category_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "is_virtual": {
-          "name": "is_virtual",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": false,
-          "default": true
-        },
-        "banner_url": {
-          "name": "banner_url",
+        "cover_image": {
+          "name": "cover_image",
           "type": "text",
           "primaryKey": false,
           "notNull": false
         },
-        "is_published": {
-          "name": "is_published",
-          "type": "boolean",
+        "organization_id": {
+          "name": "organization_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "event_status",
+          "typeSchema": "public",
           "primaryKey": false,
           "notNull": false,
-          "default": false
+          "default": "'draft'"
         },
         "created_at": {
           "name": "created_at",
@@ -111,18 +136,6 @@
           "primaryKey": false,
           "notNull": false,
           "default": "now()"
-        },
-        "start_timestamp": {
-          "name": "start_timestamp",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "end_timestamp": {
-          "name": "end_timestamp",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": false
         },
         "updated_at": {
           "name": "updated_at",
@@ -148,11 +161,11 @@
           "method": "btree",
           "with": {}
         },
-        "events_category_id_index": {
-          "name": "events_category_id_index",
+        "events_status_index": {
+          "name": "events_status_index",
           "columns": [
             {
-              "expression": "category_id",
+              "expression": "status",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -176,19 +189,6 @@
             "id"
           ],
           "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "events_category_id_categories_id_fk": {
-          "name": "events_category_id_categories_id_fk",
-          "tableFrom": "events",
-          "tableTo": "categories",
-          "columnsFrom": [
-            "category_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
           "onUpdate": "no action"
         }
       },
@@ -410,7 +410,7 @@
           "name": "owner_id",
           "type": "uuid",
           "primaryKey": false,
-          "notNull": false
+          "notNull": true
         },
         "name": {
           "name": "name",
@@ -418,11 +418,18 @@
           "primaryKey": false,
           "notNull": true
         },
+        "organization_type": {
+          "name": "organization_type",
+          "type": "organization_type",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
         "description": {
           "name": "description",
           "type": "text",
           "primaryKey": false,
-          "notNull": false
+          "notNull": true
         },
         "website": {
           "name": "website",
@@ -436,10 +443,33 @@
           "primaryKey": false,
           "notNull": false
         },
+        "social_links": {
+          "name": "social_links",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "phone_number": {
+          "name": "phone_number",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "event_types": {
+          "name": "event_types",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "address": {
+          "name": "address",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
         "country": {
           "name": "country",
-          "type": "country",
-          "typeSchema": "public",
+          "type": "text",
           "primaryKey": false,
           "notNull": true
         },
@@ -552,8 +582,21 @@
           "primaryKey": false,
           "notNull": true
         },
+        "organization_type": {
+          "name": "organization_type",
+          "type": "organization_type",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
         "description": {
           "name": "description",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "experience": {
+          "name": "experience",
           "type": "text",
           "primaryKey": false,
           "notNull": true
@@ -570,10 +613,33 @@
           "primaryKey": false,
           "notNull": false
         },
+        "social_links": {
+          "name": "social_links",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "phone_number": {
+          "name": "phone_number",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "event_types": {
+          "name": "event_types",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "address": {
+          "name": "address",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
         "country": {
           "name": "country",
-          "type": "country",
-          "typeSchema": "public",
+          "type": "text",
           "primaryKey": false,
           "notNull": true
         },
@@ -715,6 +781,131 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
+    "public.ticket_types": {
+      "name": "ticket_types",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "description": {
+          "name": "description",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "price": {
+          "name": "price",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "quantity": {
+          "name": "quantity",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "type": {
+          "name": "type",
+          "type": "ticket_type",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "sale_start": {
+          "name": "sale_start",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "sale_end": {
+          "name": "sale_end",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "max_per_order": {
+          "name": "max_per_order",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "min_per_order": {
+          "name": "min_per_order",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "event_id": {
+          "name": "event_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "ticket_types_event_id_index": {
+          "name": "ticket_types_event_id_index",
+          "columns": [
+            {
+              "expression": "event_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "ticket_types_event_id_events_id_fk": {
+          "name": "ticket_types_event_id_events_id_fk",
+          "tableFrom": "ticket_types",
+          "tableTo": "events",
+          "columnsFrom": [
+            "event_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
     "public.tickets": {
       "name": "tickets",
       "schema": "",
@@ -732,14 +923,14 @@
           "primaryKey": false,
           "notNull": true
         },
-        "name": {
-          "name": "name",
-          "type": "text",
+        "ticket_type_id": {
+          "name": "ticket_type_id",
+          "type": "uuid",
           "primaryKey": false,
           "notNull": true
         },
-        "seat_number": {
-          "name": "seat_number",
+        "name": {
+          "name": "name",
           "type": "text",
           "primaryKey": false,
           "notNull": true
@@ -767,6 +958,18 @@
         "user_id": {
           "name": "user_id",
           "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "reserved_at": {
+          "name": "reserved_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "booked_at": {
+          "name": "booked_at",
+          "type": "timestamp",
           "primaryKey": false,
           "notNull": false
         },
@@ -801,6 +1004,21 @@
           "method": "btree",
           "with": {}
         },
+        "tickets_ticket_type_id_index": {
+          "name": "tickets_ticket_type_id_index",
+          "columns": [
+            {
+              "expression": "ticket_type_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
         "tickets_status_index": {
           "name": "tickets_status_index",
           "columns": [
@@ -815,27 +1033,6 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
-        },
-        "tickets_event_seat_unique": {
-          "name": "tickets_event_seat_unique",
-          "columns": [
-            {
-              "expression": "event_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "seat_number",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
         }
       },
       "foreignKeys": {
@@ -845,6 +1042,19 @@
           "tableTo": "events",
           "columnsFrom": [
             "event_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "tickets_ticket_type_id_ticket_types_id_fk": {
+          "name": "tickets_ticket_type_id_ticket_types_id_fk",
+          "tableFrom": "tickets",
+          "tableTo": "ticket_types",
+          "columnsFrom": [
+            "ticket_type_id"
           ],
           "columnsTo": [
             "id"
@@ -990,12 +1200,27 @@
     }
   },
   "enums": {
-    "public.country": {
-      "name": "country",
+    "public.event_status": {
+      "name": "event_status",
       "schema": "public",
       "values": [
-        "US",
-        "TH"
+        "draft",
+        "published",
+        "cancelled"
+      ]
+    },
+    "public.event_types": {
+      "name": "event_types",
+      "schema": "public",
+      "values": [
+        "conference",
+        "workshop",
+        "concert",
+        "exhibition",
+        "sports",
+        "networking",
+        "festival",
+        "corporate"
       ]
     },
     "public.order_status": {
@@ -1006,6 +1231,15 @@
         "completed",
         "failed",
         "cancelled"
+      ]
+    },
+    "public.organization_type": {
+      "name": "organization_type",
+      "schema": "public",
+      "values": [
+        "company",
+        "individual",
+        "non_profit"
       ]
     },
     "public.platform_configurations_keys": {
@@ -1022,6 +1256,14 @@
       "values": [
         "available",
         "booked"
+      ]
+    },
+    "public.ticket_type": {
+      "name": "ticket_type",
+      "schema": "public",
+      "values": [
+        "paid",
+        "free"
       ]
     },
     "public.user_roles": {

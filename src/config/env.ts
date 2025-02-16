@@ -10,6 +10,7 @@ export const env = zennv({
       .enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace'])
       .default('info'),
     DB_URL: z.string(),
+    FRONTEND_URL: z.string().default('http://localhost:3000'),
     // Supabase configuration
     SUPABASE_URL: z.string(),
     SUPABASE_ANON_KEY: z.string().default(''),

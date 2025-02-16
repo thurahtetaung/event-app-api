@@ -1,89 +1,186 @@
 import { FastifyInstance } from 'fastify';
 import {
-  createEventJSONSchema,
-  deleteEventJSONSchema,
-  updateEventJSONSchema,
-  updateEventPublishStatusSchema,
-  UpdateEventPublishStatusInput,
-  eventParamsSchema,
-  CreateEventBodySchema,
-  UpdateEventBodySchema,
-} from './events.schema';
-import {
   createEventHandler,
-  deleteEventHandler,
-  getEventHandler,
   getEventsHandler,
+  getEventHandler,
   updateEventHandler,
+  deleteEventHandler,
   updateEventPublishStatusHandler,
+  createTicketTypeHandler,
+  getOrganizerEventsHandler,
+  updateTicketTypeHandler,
 } from './events.controllers';
-import { authenticateRequest, checkRole } from '../../middleware/auth';
-import { zodToJsonSchema } from 'zod-to-json-schema';
+import { authenticateRequest } from '../../middleware/auth';
+import { createEventSchema, createTicketTypeSchema, createTicketTypeJSONSchema } from './events.schema';
+
+const EVENT_CATEGORIES = [
+  'Conference',
+  'Workshop',
+  'Concert',
+  'Exhibition',
+  'Sports',
+  'Networking',
+  'Other',
+];
 
 export async function eventRoutes(app: FastifyInstance) {
-  // Get all events
+  // Get all events (public)
   app.get('/', getEventsHandler);
 
-  // Get event by id
-  app.get<{ Params: { id: string } }>(
-    '/:id',
-    {
+  // Get single event (public)
+  app.get('/:id', getEventHandler);
+
+  // Protected routes
+  app.register(async function (app) {
+    app.addHook('onRequest', authenticateRequest);
+
+    // Get organizer's events
+    app.get('/my', getOrganizerEventsHandler);
+
+    // Create event
+    app.post('/', {
       schema: {
-        params: zodToJsonSchema(eventParamsSchema, 'eventParamsSchema'),
-      },
-    },
-    getEventHandler,
-  );
+        body: {
+          type: 'object',
+          required: ['title', 'startTimestamp', 'endTimestamp', 'category', 'capacity'],
+          properties: {
+            title: { type: 'string', minLength: 1 },
+            description: { type: 'string' },
+            startTimestamp: { type: 'string' },
+            endTimestamp: { type: 'string' },
+            venue: { type: 'string', nullable: true },
+            address: { type: 'string', nullable: true },
+            category: { type: 'string', enum: EVENT_CATEGORIES },
+            isOnline: { type: 'boolean', default: false },
+            capacity: { type: 'number', minimum: 1 },
+            coverImage: { type: 'string' },
+            status: { type: 'string', enum: ['draft', 'published', 'cancelled'], default: 'draft' }
+          },
+          allOf: [
+            {
+              if: {
+                properties: { isOnline: { const: false } },
+                required: ['isOnline']
+              },
+              then: {
+                required: ['venue', 'address'],
+                properties: {
+                  venue: { type: 'string', minLength: 1 },
+                  address: { type: 'string', minLength: 1 }
+                }
+              }
+            }
+          ]
+        }
+      }
+    }, createEventHandler);
 
-  // Create event (organizer only)
-  app.post<{ Body: CreateEventBodySchema }>(
-    '/',
-    {
-      schema: createEventJSONSchema,
-      preHandler: [authenticateRequest, checkRole(['organizer'])],
-    },
-    createEventHandler,
-  );
-
-  // Update event (organizer only)
-  app.patch<{
-    Params: { id: string };
-    Body: UpdateEventBodySchema;
-  }>(
-    '/:id',
-    {
-      schema: updateEventJSONSchema,
-      preHandler: [authenticateRequest, checkRole(['organizer'])],
-    },
-    updateEventHandler,
-  );
-
-  // Delete event (organizer only)
-  app.delete<{ Params: { id: string } }>(
-    '/:id',
-    {
-      schema: deleteEventJSONSchema,
-      preHandler: [authenticateRequest, checkRole(['organizer'])],
-    },
-    deleteEventHandler,
-  );
-
-  // Update event publish status (organizer only)
-  app.patch<{
-    Params: { id: string };
-    Body: UpdateEventPublishStatusInput;
-  }>(
-    '/:id/publish',
-    {
+    // Update event
+    app.patch('/:id', {
       schema: {
-        body: zodToJsonSchema(
-          updateEventPublishStatusSchema,
-          'updateEventPublishStatusSchema',
-        ),
-        params: zodToJsonSchema(eventParamsSchema, 'eventParamsSchema'),
+        params: {
+          type: 'object',
+          required: ['id'],
+          properties: {
+            id: { type: 'string' },
+          },
+        },
+        body: {
+          type: 'object',
+          properties: {
+            title: { type: 'string', minLength: 1 },
+            description: { type: 'string' },
+            startTimestamp: { type: 'string' },
+            endTimestamp: { type: 'string' },
+            venue: { type: 'string', nullable: true },
+            address: { type: 'string', nullable: true },
+            category: { type: 'string', enum: EVENT_CATEGORIES },
+            isOnline: { type: 'boolean' },
+            capacity: { type: 'number', minimum: 1 },
+            coverImage: { type: 'string' },
+            status: { type: 'string', enum: ['draft', 'published', 'cancelled'] }
+          },
+          allOf: [
+            {
+              if: {
+                properties: { isOnline: { const: false } },
+                required: ['isOnline']
+              },
+              then: {
+                properties: {
+                  venue: { type: 'string', minLength: 1 },
+                  address: { type: 'string', minLength: 1 }
+                }
+              }
+            }
+          ]
+        }
       },
-      preHandler: [authenticateRequest, checkRole(['organizer'])],
-    },
-    updateEventPublishStatusHandler,
-  );
+    }, updateEventHandler);
+
+    // Delete event
+    app.delete('/:id', {
+      schema: {
+        params: {
+          type: 'object',
+          required: ['id'],
+          properties: {
+            id: { type: 'string' },
+          },
+        },
+      },
+    }, deleteEventHandler);
+
+    // Update event status
+    app.patch('/:id/status', {
+      schema: {
+        params: {
+          type: 'object',
+          required: ['id'],
+          properties: {
+            id: { type: 'string' },
+          },
+        },
+        body: {
+          type: 'object',
+          required: ['status'],
+          properties: {
+            status: {
+              type: 'string',
+              enum: ['draft', 'published', 'cancelled'],
+            },
+          },
+        },
+      },
+    }, updateEventPublishStatusHandler);
+
+    // Create ticket type
+    app.post('/:eventId/ticket-types', {
+      schema: {
+        params: {
+          type: 'object',
+          required: ['eventId'],
+          properties: {
+            eventId: { type: 'string' },
+          },
+        },
+        ...createTicketTypeJSONSchema
+      },
+    }, createTicketTypeHandler);
+
+    // Update ticket type
+    app.patch('/:eventId/ticket-types/:ticketTypeId', {
+      schema: {
+        params: {
+          type: 'object',
+          required: ['eventId', 'ticketTypeId'],
+          properties: {
+            eventId: { type: 'string' },
+            ticketTypeId: { type: 'string' },
+          },
+        },
+        ...createTicketTypeJSONSchema
+      },
+    }, updateTicketTypeHandler);
+  });
 }

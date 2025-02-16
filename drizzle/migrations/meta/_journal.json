@@ -5,29 +5,8 @@
     {
       "idx": 0,
       "version": "7",
-      "when": 1739636313563,
-      "tag": "0000_demonic_abomination",
-      "breakpoints": false
-    },
-    {
-      "idx": 1,
-      "version": "7",
-      "when": 1739638512474,
-      "tag": "0001_round_wrecking_crew",
-      "breakpoints": false
-    },
-    {
-      "idx": 2,
-      "version": "7",
-      "when": 1739638761144,
-      "tag": "0002_glossy_bill_hollister",
-      "breakpoints": false
-    },
-    {
-      "idx": 3,
-      "version": "7",
-      "when": 1739643969423,
-      "tag": "0003_fresh_karnak",
+      "when": 1739707722074,
+      "tag": "0000_tired_alice",
       "breakpoints": false
     }
   ]

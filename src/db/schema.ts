@@ -62,29 +62,36 @@ export const categories = pgTable('categories', {
   updatedAt: timestamp().defaultNow(),
 });
 
+export const eventStatusEnum = pgEnum('event_status', [
+  'draft',
+  'published',
+  'cancelled',
+]);
+
 export const events = pgTable(
   'events',
   {
     id: uuid().primaryKey().defaultRandom(),
-    name: text().notNull(),
+    title: text().notNull(),
     description: text(),
+    startTimestamp: timestamp().notNull(),
+    endTimestamp: timestamp().notNull(),
+    venue: text(),
+    address: text(),
+    category: text().notNull(),
+    isOnline: boolean().default(false),
+    capacity: integer().notNull(),
+    coverImage: text(),
     organizationId: uuid()
       .notNull()
       .references(() => organizations.id, { onDelete: 'cascade' }),
-    capacity: integer().notNull(),
-    categoryId: uuid().references(() => categories.id),
-    isVirtual: boolean().default(true),
-    bannerUrl: text(),
-    isPublished: boolean().default(false),
+    status: eventStatusEnum().default('draft'),
     createdAt: timestamp().defaultNow(),
-    startTimestamp: timestamp(),
-    endTimestamp: timestamp(),
     updatedAt: timestamp().defaultNow(),
   },
   (events) => [
-    // Add index for organizationId, categoryId
     index().on(events.organizationId),
-    index().on(events.categoryId),
+    index().on(events.status),
   ],
 );
 
@@ -118,6 +125,35 @@ export const organizations = pgTable(
   ],
 );
 
+export const ticketTypeEnum = pgEnum('ticket_type', [
+  'paid',
+  'free',
+]);
+
+export const ticketTypes = pgTable(
+  'ticket_types',
+  {
+    id: uuid().primaryKey().defaultRandom(),
+    name: text().notNull(),
+    description: text(),
+    price: integer().notNull(), // Store in cents
+    quantity: integer().notNull(),
+    type: ticketTypeEnum().notNull(),
+    saleStart: timestamp().notNull(),
+    saleEnd: timestamp().notNull(),
+    maxPerOrder: integer(),
+    minPerOrder: integer(),
+    eventId: uuid()
+      .notNull()
+      .references(() => events.id, { onDelete: 'cascade' }),
+    createdAt: timestamp().defaultNow(),
+    updatedAt: timestamp().defaultNow(),
+  },
+  (ticketTypes) => [
+    index().on(ticketTypes.eventId),
+  ],
+);
+
 export const ticketStatusEnum = pgEnum('ticket_status', [
   'available',
   'booked',
@@ -130,27 +166,27 @@ export const tickets = pgTable(
     eventId: uuid('event_id')
       .notNull()
       .references(() => events.id, { onDelete: 'cascade' }),
+    ticketTypeId: uuid('ticket_type_id')
+      .notNull()
+      .references(() => ticketTypes.id, { onDelete: 'cascade' }),
     name: text('name').notNull(),
-    seatNumber: text('seat_number').notNull(),
-    price: integer('price').notNull(),
+    price: integer('price').notNull(), // Store in cents
     currency: text('currency').notNull().default('usd'),
     status: text('status')
       .notNull()
       .default('available')
       .$type<'available' | 'reserved' | 'booked'>(),
     userId: uuid('user_id').references(() => users.id),
+    reservedAt: timestamp('reserved_at'),
+    bookedAt: timestamp('booked_at'),
     createdAt: timestamp('created_at').defaultNow(),
     updatedAt: timestamp('updated_at').defaultNow(),
   },
   (tickets) => [
-    // Add index for eventId and status
+    // Add index for eventId, ticketTypeId and status
     index().on(tickets.eventId),
+    index().on(tickets.ticketTypeId),
     index().on(tickets.status),
-    // Add unique constraint for event_id + seat_number combination
-    uniqueIndex('tickets_event_seat_unique').on(
-      tickets.eventId,
-      tickets.seatNumber,
-    ),
   ],
 );
 

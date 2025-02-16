@@ -7,9 +7,10 @@ import {
   orders,
   orderItems,
   users,
+  ticketTypes,
 } from '../../db/schema';
-import { TicketGenerationInput, PurchaseTicketsInput } from './tickets.schema';
-import { checkEventOrganizer } from '../events/events.services';
+import { TicketSchema, UpdateTicketStatusInput } from './tickets.schema';
+import { checkEventOwner } from '../events/events.services';
 import { createCheckoutSession } from '../stripe/stripe.services';
 import { env } from '../../config/env';
 import { logger } from '../../utils/logger';
@@ -19,7 +20,6 @@ import {
   releaseTicket,
   releaseUserTickets,
 } from '../../utils/redis';
-import redisClient from '../../utils/redis';
 import {
   AppError,
   NotFoundError,
@@ -27,252 +27,134 @@ import {
   ForbiddenError,
 } from '../../utils/errors';
 
-function generateSeatNumber(
-  index: number,
-  config: TicketGenerationInput['sections'][0]['seatNumbering'],
-): string {
-  switch (config.type) {
-    case 'numbered':
-      const number = (config.startFrom || 1) + index;
-      return `${config.prefix || ''}${number}${config.suffix || ''}`;
-    case 'alphabet':
-      const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
-      const letter = alphabet[index % 26];
-      const row = Math.floor(index / 26);
-      return `${config.prefix || ''}${row > 0 ? row : ''}${letter}${config.suffix || ''}`;
-    case 'custom':
-      return `${config.prefix || ''}${index + 1}${config.suffix || ''}`;
-    default:
-      return `${index + 1}`;
+interface PurchaseTicketsInput {
+  eventId: string;
+  tickets: { ticketId: string }[];
+}
+
+export async function createTicketsForTicketType(ticketTypeId: string, quantity: number) {
+  try {
+    logger.info(`Creating ${quantity} tickets for ticket type ${ticketTypeId}`);
+
+    // Get ticket type details
+    const [ticketType] = await db
+      .select()
+      .from(ticketTypes)
+      .where(eq(ticketTypes.id, ticketTypeId))
+      .limit(1);
+
+    if (!ticketType) {
+      throw new NotFoundError('Ticket type not found');
+    }
+
+    // Create tickets in bulk
+    const ticketsToCreate = Array.from({ length: quantity }, () => ({
+      eventId: ticketType.eventId,
+      ticketTypeId: ticketType.id,
+      name: ticketType.name,
+      price: ticketType.price,
+      currency: 'usd',
+      status: 'available' as const,
+    }));
+
+    const createdTickets = await db.insert(tickets).values(ticketsToCreate).returning();
+    logger.info(`Successfully created ${createdTickets.length} tickets`);
+
+    return createdTickets;
+  } catch (error) {
+    logger.error('Error creating tickets:', error);
+    throw new AppError(500, 'Failed to create tickets');
   }
 }
 
-export async function generateTickets(
-  userId: string,
-  input: TicketGenerationInput,
+export async function updateTicketStatus(
+  ticketId: string,
+  data: UpdateTicketStatusInput,
 ) {
   try {
-    logger.info('Starting ticket generation process...');
+    logger.info(`Updating ticket ${ticketId} status to ${data.status}`);
 
-    // Get user role and check permissions
-    const [user] = await db
-      .select({ role: users.role })
-      .from(users)
-      .where(eq(users.id, userId))
-      .limit(1);
+    const updateData: Partial<typeof tickets.$inferInsert> = {
+      status: data.status,
+      updatedAt: new Date(),
+    };
 
-    // Only check event organizer permission if user is not an admin
-    if (user?.role !== 'admin') {
-      logger.debug(
-        `Checking organizer permissions for user ${userId} on event ${input.eventId}...`,
-      );
-      await checkEventOrganizer(userId, input.eventId);
-      logger.debug('Organizer permissions verified');
-    } else {
-      logger.debug('Admin user detected, bypassing organizer check');
+    if (data.userId) {
+      updateData.userId = data.userId;
     }
 
-    // Get event capacity and existing ticket count
-    const [event] = await db
-      .select({
-        capacity: events.capacity,
-      })
-      .from(events)
-      .where(eq(events.id, input.eventId))
-      .limit(1);
-
-    if (!event) {
-      logger.error(`Event not found: ${input.eventId}`);
-      throw new Error('Event not found');
+    if (data.status === 'reserved') {
+      updateData.reservedAt = new Date();
+    } else if (data.status === 'booked') {
+      updateData.bookedAt = new Date();
     }
 
-    const [ticketCount] = await db
-      .select({ count: count() })
-      .from(tickets)
-      .where(eq(tickets.eventId, input.eventId));
+    const [updatedTicket] = await db
+      .update(tickets)
+      .set(updateData)
+      .where(eq(tickets.id, ticketId))
+      .returning();
 
-    // Calculate total new tickets to be generated
-    const newTicketsCount = input.sections.reduce(
-      (sum, section) => sum + section.numberOfSeats,
-      0,
-    );
-
-    // Check if total tickets would exceed capacity
-    if (ticketCount.count + newTicketsCount > event.capacity) {
-      logger.error(
-        `Ticket generation would exceed event capacity. Current tickets: ${ticketCount.count}, New tickets: ${newTicketsCount}, Capacity: ${event.capacity}`,
-      );
-      throw new Error(
-        `Cannot generate tickets: would exceed event capacity of ${event.capacity}`,
-      );
+    if (!updatedTicket) {
+      throw new NotFoundError('Ticket not found');
     }
 
-    // Generate tickets for each section
-    logger.info(
-      `Generating tickets for ${input.sections.length} sections in event ${input.eventId}...`,
-    );
-
-    // Start a transaction to ensure all operations are atomic
-    return await db.transaction(async (tx) => {
-      logger.info('Starting database transaction for ticket generation...');
-
-      // Generate and insert tickets for each section
-      const ticketsToInsert = input.sections.flatMap((section) => {
-        const sectionTickets = [];
-        for (let i = 0; i < section.numberOfSeats; i++) {
-          sectionTickets.push({
-            eventId: input.eventId,
-            name: section.name,
-            price: section.price,
-            currency: section.currency,
-            seatNumber: generateSeatNumber(i, section.seatNumbering),
-            status: 'available' as const,
-          });
-        }
-        return sectionTickets;
-      });
-
-      try {
-        // Insert all tickets
-        const result = await tx
-          .insert(tickets)
-          .values(ticketsToInsert)
-          .returning();
-        logger.info(
-          `Ticket generation completed successfully, generated ${result.length} tickets`,
-        );
-        return result;
-      } catch (error) {
-        // Check if it's a unique constraint violation
-        if (
-          error.code === '23505' &&
-          error.constraint === 'tickets_event_seat_unique'
-        ) {
-          logger.error(
-            `Duplicate seat numbers detected for event ${input.eventId}`,
-          );
-          throw new Error(
-            'Some seat numbers already exist for this event. Please check your seat numbering configuration to avoid duplicates.',
-          );
-        }
-        throw error;
-      }
-    });
+    logger.info(`Successfully updated ticket ${ticketId} status`);
+    return updatedTicket;
   } catch (error) {
-    logger.error(`Error generating tickets: ${error}`);
-    throw error;
+    logger.error('Error updating ticket status:', error);
+    if (error instanceof NotFoundError) {
+      throw error;
+    }
+    throw new AppError(500, 'Failed to update ticket status');
   }
 }
 
-// export async function purchaseTickets(
-//   userId: string,
-//   input: PurchaseTicketsInput,
-// ) {
-//   try {
-//     // Start a transaction
-//     return await db.transaction(async (tx) => {
-//       // Get the event
-//       const [event] = await tx
-//         .select()
-//         .from(events)
-//         .where(eq(events.id, input.eventId))
-//         .limit(1);
+export async function getAvailableTickets(eventId: string, ticketTypeId: string) {
+  try {
+    logger.info(`Getting available tickets for event ${eventId} and ticket type ${ticketTypeId}`);
 
-//       if (!event) {
-//         throw new Error('Event not found');
-//       }
+    const availableTickets = await db
+      .select()
+      .from(tickets)
+      .where(
+        and(
+          eq(tickets.eventId, eventId),
+          eq(tickets.ticketTypeId, ticketTypeId),
+          eq(tickets.status, 'available')
+        )
+      );
 
-//       if (!event.isPublished) {
-//         throw new Error('Event is not published');
-//       }
+    logger.info(`Found ${availableTickets.length} available tickets`);
+    return availableTickets;
+  } catch (error) {
+    logger.error('Error getting available tickets:', error);
+    throw new AppError(500, 'Failed to get available tickets');
+  }
+}
 
-//       // Check if any of the tickets are already reserved in Redis
-//       for (const ticket of input.tickets) {
-//         if (await isTicketReserved(ticket.ticketId)) {
-//           throw new Error('Some tickets are already reserved');
-//         }
-//       }
+export async function getTicketsByUser(userId: string) {
+  try {
+    logger.info(`Getting tickets for user ${userId}`);
 
-//       // Get the tickets and verify they are available
-//       const selectedTickets = await tx
-//         .select()
-//         .from(tickets)
-//         .where(
-//           and(
-//             eq(tickets.eventId, input.eventId),
-//             inArray(
-//               tickets.id,
-//               input.tickets.map((t) => t.ticketId),
-//             ),
-//             eq(tickets.status, 'available'),
-//           ),
-//         );
+    const userTickets = await db
+      .select({
+        ticket: tickets,
+        event: events,
+        ticketType: ticketTypes,
+      })
+      .from(tickets)
+      .innerJoin(events, eq(tickets.eventId, events.id))
+      .innerJoin(ticketTypes, eq(tickets.ticketTypeId, ticketTypes.id))
+      .where(eq(tickets.userId, userId));
 
-//       if (selectedTickets.length !== input.tickets.length) {
-//         throw new Error('Some tickets are not available');
-//       }
-
-//       // Reserve tickets in Redis
-//       const reservationPromises = selectedTickets.map((ticket) =>
-//         reserveTicket(ticket.id, userId),
-//       );
-//       const reservationResults = await Promise.all(reservationPromises);
-
-//       if (reservationResults.some((result) => !result)) {
-//         // If any reservation failed, release any successful reservations
-//         await releaseUserTickets(userId);
-//         throw new Error('Failed to reserve tickets');
-//       }
-
-//       // Calculate total amount
-//       const totalAmount = selectedTickets.reduce(
-//         (sum, ticket) => sum + ticket.price,
-//         0,
-//       );
-
-//       // Create payment intent
-//       const paymentIntent = await createPaymentIntent({
-//         amount: totalAmount,
-//         currency: 'usd', // TODO: Make this configurable
-//         organizationId: event.organizationId,
-//         metadata: {
-//           eventId: event.id,
-//           userId,
-//           ticketIds: selectedTickets.map((t) => t.id).join(','),
-//         },
-//       });
-
-//       // Create order
-//       const [order] = await tx
-//         .insert(orders)
-//         .values({
-//           userId,
-//           eventId: event.id,
-//           stripePaymentId: paymentIntent.id,
-//           status: 'pending',
-//         })
-//         .returning();
-
-//       // Create order items
-//       await tx.insert(orderItems).values(
-//         selectedTickets.map((ticket) => ({
-//           orderId: order.id,
-//           ticketId: ticket.id,
-//         })),
-//       );
-
-//       return {
-//         order,
-//         clientSecret: paymentIntent.client_secret,
-//       };
-//     });
-//   } catch (error) {
-//     // Release any reserved tickets on error
-//     await releaseUserTickets(userId);
-//     logger.error(`Error purchasing tickets: ${error}`);
-//     throw error;
-//   }
-// }
+    logger.info(`Found ${userTickets.length} tickets for user`);
+    return userTickets;
+  } catch (error) {
+    logger.error('Error getting user tickets:', error);
+    throw new AppError(500, 'Failed to get user tickets');
+  }
+}
 
 export async function purchaseTickets(
   userId: string,
@@ -292,7 +174,7 @@ export async function purchaseTickets(
         throw new Error('Event not found');
       }
 
-      if (!event.isPublished) {
+      if (event.status !== 'published') {
         throw new Error('Event is not published');
       }
 
@@ -335,8 +217,7 @@ export async function purchaseTickets(
       }
 
       // Step 5: Calculate total amount in cents
-      const totalAmount =
-        selectedTickets.reduce((sum, ticket) => sum + ticket.price, 0) * 100;
+      const totalAmount = selectedTickets.reduce((sum: number, ticket) => sum + ticket.price, 0);
 
       // Step 7: Create pending order
       const [order] = await tx

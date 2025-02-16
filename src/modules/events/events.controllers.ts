@@ -7,39 +7,61 @@ import {
   updateEvent,
   updateEventPublishStatus,
   checkEventExists,
+  createTicketType,
+  getEventsByOrganization,
+  updateTicketType,
 } from './events.services';
 import {
-  CreateEventBodySchema,
-  EventParamsSchema,
-  UpdateEventBodySchema,
-  UpdateEventPublishStatusInput,
+  EventSchema,
+  CreateEventSchema,
+  CreateTicketTypeSchema,
 } from './events.schema';
 import { logger } from '../../utils/logger';
+import { eq } from 'drizzle-orm';
+import { organizations, events } from '../../db/schema';
+import { db } from '../../db';
+
+interface RequestWithParams {
+  Params: {
+    id: string;
+  };
+}
 
 export async function createEventHandler(
   request: FastifyRequest<{
-    Body: CreateEventBodySchema;
+    Body: CreateEventSchema['body'];
   }>,
   reply: FastifyReply,
 ) {
   try {
-    const { startTimestamp, endTimestamp, ...rest } = request.body;
-    const result = await createEvent(
-      request.user.id,
-      {
-        ...rest,
-        startTimestamp: startTimestamp ? new Date(startTimestamp) : undefined,
-        endTimestamp: endTimestamp ? new Date(endTimestamp) : undefined,
-      },
-      request.user.role,
-    );
-    return reply.code(201).send(result);
-  } catch (error) {
-    logger.error(`Error creating event in controller: ${error}`);
-    if (error instanceof Error) {
-      return reply.code(400).send({ message: error.message });
+    const userId = request.user.id;
+
+    // Get user's organization
+    const [organization] = await db
+      .select()
+      .from(organizations)
+      .where(eq(organizations.ownerId, userId))
+      .limit(1);
+
+    if (!organization) {
+      return reply.code(403).send({ error: 'You must create an organization first' });
     }
-    return reply.code(500).send({ message: 'Internal server error' });
+
+    // Log the request body and organization ID for debugging
+    logger.debug(`Creating event with data: ${JSON.stringify({
+      body: request.body,
+      organizationId: organization.id
+    })}`);
+
+    const event = await createEvent({
+      ...request.body,
+      organizationId: organization.id,
+    });
+
+    return reply.code(201).send(event);
+  } catch (error) {
+    logger.error(`Error creating event: ${error}`);
+    return reply.code(500).send({ error: 'Failed to create event' });
   }
 }
 
@@ -51,110 +73,198 @@ export async function getEventsHandler(
     const events = await getEvents();
     return reply.code(200).send(events);
   } catch (error) {
-    logger.error(`Error getting events in controller: ${error}`);
-    if (error instanceof Error) {
-      return reply.code(400).send({ message: error.message });
-    }
-    return reply.code(500).send({ message: 'Internal server error' });
+    logger.error(`Error getting events: ${error}`);
+    return reply.code(500).send({ error: 'Failed to get events' });
   }
 }
 
 export async function getEventHandler(
-  request: FastifyRequest<{
-    Params: EventParamsSchema;
-  }>,
+  request: FastifyRequest<RequestWithParams>,
   reply: FastifyReply,
 ) {
   try {
     const event = await getEventById(request.params.id);
     if (!event) {
-      return reply.code(404).send({ message: 'Event not found' });
+      return reply.code(404).send({ error: 'Event not found' });
     }
     return reply.code(200).send(event);
   } catch (error) {
-    logger.error(`Error getting event by ID in controller: ${error}`);
-    if (error instanceof Error) {
-      return reply.code(400).send({ message: error.message });
-    }
-    return reply.code(500).send({ message: 'Internal server error' });
+    logger.error(`Error getting event: ${error}`);
+    return reply.code(500).send({ error: 'Failed to get event' });
   }
 }
 
 export async function updateEventHandler(
   request: FastifyRequest<{
     Params: { id: string };
-    Body: UpdateEventBodySchema;
+    Body: Partial<EventSchema>;
   }>,
   reply: FastifyReply,
 ) {
   try {
     await checkEventExists(request.params.id);
-
-    const { startTimestamp, endTimestamp, ...rest } = request.body;
-    const result = await updateEvent(
+    const event = await updateEvent(
       request.user.id,
       request.params.id,
-      {
-        ...rest,
-        startTimestamp: startTimestamp ? new Date(startTimestamp) : undefined,
-        endTimestamp: endTimestamp ? new Date(endTimestamp) : undefined,
-      },
+      request.body,
       request.user.role,
     );
-    return reply.code(200).send(result);
+    return reply.code(200).send(event);
   } catch (error) {
-    logger.error(`Error updating event in controller: ${error}`);
-    if (error instanceof Error) {
-      return reply.code(400).send({ message: error.message });
-    }
-    return reply.code(500).send({ message: 'Internal server error' });
+    logger.error(`Error updating event: ${error}`);
+    return reply.code(500).send({ error: 'Failed to update event' });
   }
 }
 
 export async function deleteEventHandler(
-  request: FastifyRequest<{
-    Params: { id: string };
-  }>,
+  request: FastifyRequest<RequestWithParams>,
   reply: FastifyReply,
 ) {
   try {
     await checkEventExists(request.params.id);
-
-    const result = await deleteEvent(
+    await deleteEvent(
       request.user.id,
       request.params.id,
       request.user.role,
     );
     return reply.code(200).send({ message: 'Event deleted successfully' });
   } catch (error) {
-    logger.error(`Error deleting event in controller: ${error}`);
-    if (error instanceof Error) {
-      return reply.code(400).send({ message: error.message });
-    }
-    return reply.code(500).send({ message: 'Internal server error' });
+    logger.error(`Error deleting event: ${error}`);
+    return reply.code(500).send({ error: 'Failed to delete event' });
   }
 }
 
 export async function updateEventPublishStatusHandler(
   request: FastifyRequest<{
     Params: { id: string };
-    Body: UpdateEventPublishStatusInput;
+    Body: { status: 'draft' | 'published' | 'cancelled' };
   }>,
   reply: FastifyReply,
 ) {
   try {
-    const result = await updateEventPublishStatus(
+    const event = await updateEventPublishStatus(
       request.user.id,
       request.params.id,
-      request.body.isPublished,
+      request.body.status,
       request.user.role,
     );
-    return reply.code(200).send(result);
+    return reply.code(200).send(event);
   } catch (error) {
-    logger.error(`Error updating event publish status in controller: ${error}`);
-    if (error instanceof Error) {
-      return reply.code(400).send({ message: error.message });
+    logger.error(`Error updating event status: ${error}`);
+    return reply.code(500).send({ error: 'Failed to update event status' });
+  }
+}
+
+export async function createTicketTypeHandler(
+  request: FastifyRequest<{
+    Body: CreateTicketTypeSchema['body'];
+    Params: { eventId: string };
+  }>,
+  reply: FastifyReply,
+) {
+  try {
+    const { eventId } = request.params;
+    const userId = request.user.id;
+
+    // Get event with organization details
+    const [eventWithOrg] = await db
+      .select({
+        event: events,
+        organization: organizations,
+      })
+      .from(events)
+      .innerJoin(
+        organizations,
+        eq(events.organizationId, organizations.id),
+      )
+      .where(eq(events.id, eventId))
+      .limit(1);
+
+    if (!eventWithOrg) {
+      return reply.code(404).send({ error: 'Event not found' });
     }
-    return reply.code(500).send({ message: 'Internal server error' });
+
+    // Check if user owns the organization
+    if (eventWithOrg.organization.ownerId !== userId) {
+      return reply.code(403).send({ error: 'Unauthorized' });
+    }
+
+    const ticketType = await createTicketType({
+      ...request.body,
+      eventId,
+    });
+
+    return reply.code(201).send(ticketType);
+  } catch (error) {
+    logger.error(`Error creating ticket type: ${error}`);
+    return reply.code(500).send({ error: 'Failed to create ticket type' });
+  }
+}
+
+export async function getOrganizerEventsHandler(
+  request: FastifyRequest,
+  reply: FastifyReply,
+) {
+  try {
+    const userId = request.user.id;
+
+    // Get user's organization
+    const [organization] = await db
+      .select()
+      .from(organizations)
+      .where(eq(organizations.ownerId, userId))
+      .limit(1);
+
+    if (!organization) {
+      return reply.code(403).send({ error: 'You must create an organization first' });
+    }
+
+    const events = await getEventsByOrganization(organization.id);
+    return reply.code(200).send(events);
+  } catch (error) {
+    logger.error(`Error getting organizer events: ${error}`);
+    return reply.code(500).send({ error: 'Failed to get events' });
+  }
+}
+
+export async function updateTicketTypeHandler(
+  request: FastifyRequest<{
+    Body: CreateTicketTypeSchema['body'];
+    Params: { eventId: string; ticketTypeId: string };
+  }>,
+  reply: FastifyReply,
+) {
+  try {
+    const { eventId, ticketTypeId } = request.params;
+    const userId = request.user.id;
+
+    // Get event with organization details
+    const [eventWithOrg] = await db
+      .select({
+        event: events,
+        organization: organizations,
+      })
+      .from(events)
+      .innerJoin(
+        organizations,
+        eq(events.organizationId, organizations.id),
+      )
+      .where(eq(events.id, eventId))
+      .limit(1);
+
+    if (!eventWithOrg) {
+      return reply.code(404).send({ error: 'Event not found' });
+    }
+
+    // Check if user owns the organization
+    if (eventWithOrg.organization.ownerId !== userId) {
+      return reply.code(403).send({ error: 'Unauthorized' });
+    }
+
+    const ticketType = await updateTicketType(eventId, ticketTypeId, request.body);
+    return reply.code(200).send(ticketType);
+  } catch (error) {
+    logger.error(`Error updating ticket type: ${error}`);
+    return reply.code(500).send({ error: 'Failed to update ticket type' });
   }
 }

@@ -1,40 +1,40 @@
 import { eq, InferInsertModel } from 'drizzle-orm';
 import { db } from '../../db';
-import { events, organizations } from '../../db/schema';
+import { events, ticketTypes, users, organizations, tickets } from '../../db/schema';
 import { logger } from '../../utils/logger';
-import { tickets } from '../../db/schema';
-import { count } from 'drizzle-orm';
+import { count, desc } from 'drizzle-orm';
 import {
   AppError,
   NotFoundError,
   ForbiddenError,
   ValidationError,
 } from '../../utils/errors';
+import { EventSchema, TicketTypeSchema } from './events.schema';
+import { createTicketsForTicketType } from '../tickets/tickets.services';
+import { sql } from 'drizzle-orm';
+import { and } from 'drizzle-orm';
+import { inArray } from 'drizzle-orm';
 
 // Permission check utility
-export async function checkEventOrganizer(
+export async function checkEventOwner(
   userId: string,
   eventId: string,
   userRole?: string,
 ) {
   logger.debug(
-    `Checking event organizer permissions for user ${userId} and event ${eventId}`,
+    `Checking event owner permissions for user ${userId} and event ${eventId}`,
   );
   // Allow admins to bypass checks
   if (userRole === 'admin') {
     const event = await db
-      .select({
-        event: events,
-        organization: organizations,
-      })
+      .select()
       .from(events)
-      .leftJoin(organizations, eq(events.organizationId, organizations.id))
       .where(eq(events.id, eventId))
       .limit(1);
 
     if (!event.length) {
       logger.warn(`Event not found during permission check: ${eventId}`);
-      throw new Error('Event not found');
+      throw new NotFoundError('Event not found');
     }
 
     logger.debug(
@@ -43,109 +43,112 @@ export async function checkEventOrganizer(
     return event[0];
   }
 
+  // First get the event and its organization
   const event = await db
     .select({
       event: events,
       organization: organizations,
     })
     .from(events)
-    .leftJoin(organizations, eq(events.organizationId, organizations.id))
+    .innerJoin(
+      organizations,
+      eq(events.organizationId, organizations.id),
+    )
     .where(eq(events.id, eventId))
     .limit(1);
 
   if (!event.length) {
-    logger.warn(`Event not found during permission check for event ${eventId}`);
-    throw new Error('Event not found');
+    logger.warn(`Event not found during permission check: ${eventId}`);
+    throw new NotFoundError('Event not found');
   }
 
-  if (event[0].organization?.ownerId !== userId) {
+  // Check if user owns the organization
+  if (event[0].organization.ownerId !== userId) {
     logger.warn(
       `Unauthorized event modification attempt by user ${userId} for event ${eventId}`,
     );
-    throw new Error('Unauthorized to modify this event');
+    throw new ForbiddenError('Unauthorized to modify this event');
   }
 
   logger.debug(
-    `Event organizer permission check passed for user ${userId} and event ${eventId}`,
+    `Event owner permission check passed for user ${userId} and event ${eventId}`,
   );
-  return event[0];
+  return event[0].event;
 }
 
-// For creating events, we need to check if user owns the organization
-async function checkOrganizationOwner(
-  userId: string,
-  organizationId: string,
-  userRole?: string,
-) {
-  logger.info(`Here is the user role: ${userRole}`);
-  logger.debug(
-    `Checking organization owner permissions for user ${userId} and organization ${organizationId}`,
-  );
+export async function createEvent(data: EventSchema) {
+  try {
+    logger.info('Creating new event');
+    logger.debug(`Event data: ${JSON.stringify(data)}`);
 
-  // Allow admins to bypass checks
-  if (userRole === 'admin') {
-    const org = await db
-      .select()
-      .from(organizations)
-      .where(eq(organizations.id, organizationId))
-      .limit(1);
-
-    if (!org.length) {
-      logger.warn(
-        `Organization not found during permission check: ${organizationId}`,
-      );
-      throw new Error('Organization not found');
+    // Validate the data
+    if (!data.title || !data.category || !data.organizationId) {
+      throw new ValidationError('Missing required fields');
     }
 
-    logger.debug(
-      `Admin permission check passed for user ${userId} and organization ${organizationId}`,
-    );
-    return org[0];
-  }
+    // Ensure category is treated as text
+    const eventData = {
+      title: data.title,
+      description: data.description,
+      startTimestamp: new Date(data.startTimestamp),
+      endTimestamp: new Date(data.endTimestamp),
+      venue: data.venue,
+      address: data.address,
+      category: data.category,
+      isOnline: data.isOnline,
+      capacity: data.capacity,
+      coverImage: data.coverImage,
+      organizationId: data.organizationId,
+      status: data.status,
+    };
 
-  const org = await db
-    .select()
-    .from(organizations)
-    .where(eq(organizations.id, organizationId))
-    .limit(1);
+    logger.debug(`Inserting event with data: ${JSON.stringify(eventData)}`);
 
-  if (!org.length) {
-    logger.warn(
-      `Organization not found during permission check: ${organizationId}`,
-    );
-    throw new Error('Organization not found');
-  }
+    const [event] = await db.insert(events)
+      .values(eventData)
+      .returning();
 
-  if (org[0].ownerId !== userId) {
-    logger.warn(
-      `Unauthorized organization access attempt by user ${userId} for organization ${organizationId}`,
-    );
-    throw new Error('Unauthorized to create events for this organization');
-  }
-
-  logger.debug(
-    `Organization owner permission check passed for user ${userId} and organization ${organizationId}`,
-  );
-  return org[0];
-}
-
-export async function createEvent(
-  userId: string,
-  data: InferInsertModel<typeof events>,
-  userRole?: string,
-) {
-  try {
-    logger.info(
-      `Creating new event for user ${userId} in organization ${data.organizationId}`,
-    );
-    await checkOrganizationOwner(userId, data.organizationId, userRole);
-
-    const result = await db.insert(events).values(data).returning();
-    logger.info(`Event created successfully with ID ${result[0].id}`);
-    return result[0];
+    logger.info(`Event created successfully with ID ${event.id}`);
+    return event;
   } catch (error) {
     logger.error(`Error creating event: ${error}`);
+    if (error instanceof ValidationError) {
+      throw error;
+    }
     throw new AppError(500, 'Failed to create event');
+  }
+}
+
+export async function createTicketType(data: TicketTypeSchema) {
+  try {
+    logger.info('Creating new ticket type');
+    const [ticketType] = await db.insert(ticketTypes).values({
+      name: data.name,
+      description: data.description,
+      price: Math.round(data.price * 100), // Convert to cents
+      quantity: data.quantity,
+      type: data.type,
+      saleStart: new Date(data.saleStart),
+      saleEnd: new Date(data.saleEnd),
+      maxPerOrder: data.maxPerOrder,
+      minPerOrder: data.minPerOrder,
+      eventId: data.eventId,
+    }).returning();
+
+    logger.info(`Ticket type created successfully with ID ${ticketType.id}`);
+
+    // Create tickets for this ticket type
+    const tickets = await createTicketsForTicketType(ticketType.id, data.quantity);
+    logger.info(`Created ${tickets.length} tickets for ticket type ${ticketType.id}`);
+
+    return {
+      ...ticketType,
+      price: ticketType.price / 100, // Convert back to decimal
+      tickets,
+    };
+  } catch (error) {
+    logger.error(`Error creating ticket type: ${error}`);
+    throw new AppError(500, 'Failed to create ticket type');
   }
 }
 
@@ -155,7 +158,7 @@ export async function getEvents() {
     const result = await db
       .select()
       .from(events)
-      .where(eq(events.isPublished, true));
+      .where(eq(events.status, 'published'));
 
     logger.debug(`Successfully fetched ${result.length} events`);
     return result;
@@ -165,27 +168,70 @@ export async function getEvents() {
   }
 }
 
-export async function getEventById(eventId: string) {
+export async function getEventById(id: string) {
   try {
-    logger.info(`Fetching event by ID ${eventId}`);
-    const result = await db
+    logger.info(`Fetching event by ID ${id}`);
+    const [event] = await db
       .select()
       .from(events)
-      .where(eq(events.id, eventId))
+      .where(eq(events.id, id))
       .limit(1);
 
-    if (!result[0]) {
-      logger.warn(`Event not found with ID ${eventId}`);
+    if (!event) {
       throw new NotFoundError('Event not found');
     }
 
-    logger.debug(`Successfully fetched event ${eventId}`);
-    return result[0];
+    // Get ticket types with sold count
+    const ticketTypesList = await db
+      .select({
+        id: ticketTypes.id,
+        name: ticketTypes.name,
+        description: ticketTypes.description,
+        price: ticketTypes.price,
+        quantity: ticketTypes.quantity,
+        type: ticketTypes.type,
+        saleStart: ticketTypes.saleStart,
+        saleEnd: ticketTypes.saleEnd,
+        maxPerOrder: ticketTypes.maxPerOrder,
+        minPerOrder: ticketTypes.minPerOrder,
+        eventId: ticketTypes.eventId,
+        createdAt: ticketTypes.createdAt,
+        updatedAt: ticketTypes.updatedAt,
+        soldCount: sql<number>`COALESCE((
+          SELECT COUNT(*)
+          FROM ${tickets}
+          WHERE ${tickets.ticketTypeId} = ${ticketTypes.id}
+          AND ${tickets.status} = 'booked'
+        ), 0)`,
+        status: sql<'on-sale' | 'paused' | 'sold-out' | 'scheduled'>`
+          CASE
+            WHEN ${ticketTypes.quantity} <= (
+              SELECT COUNT(*)
+              FROM ${tickets}
+              WHERE ${tickets.ticketTypeId} = ${ticketTypes.id}
+              AND ${tickets.status} = 'booked'
+            ) THEN 'sold-out'
+            WHEN ${ticketTypes.saleStart} > NOW() THEN 'scheduled'
+            WHEN ${ticketTypes.saleEnd} < NOW() THEN 'paused'
+            ELSE 'on-sale'
+          END
+        `
+      })
+      .from(ticketTypes)
+      .where(eq(ticketTypes.eventId, id));
+
+    return {
+      ...event,
+      ticketTypes: ticketTypesList.map(t => ({
+        ...t,
+        price: Number(t.price) / 100, // Convert back to decimal
+      })),
+    };
   } catch (error) {
+    logger.error(`Error getting event: ${error}`);
     if (error instanceof NotFoundError) {
       throw error;
     }
-    logger.error(`Error fetching event: ${error}`);
     throw new AppError(500, 'Failed to fetch event');
   }
 }
@@ -193,40 +239,45 @@ export async function getEventById(eventId: string) {
 export async function updateEvent(
   userId: string,
   id: string,
-  data: Partial<InferInsertModel<typeof events>>,
+  data: Partial<EventSchema>,
   userRole?: string,
 ) {
   try {
     logger.info(`Updating event ${id} by user ${userId}`);
-    await checkEventOrganizer(userId, id, userRole);
+    await checkEventOwner(userId, id, userRole);
 
     // If capacity is being updated, check existing tickets
     if (data.capacity !== undefined) {
       const [ticketCount] = await db
         .select({ count: count() })
-        .from(tickets)
-        .where(eq(tickets.eventId, id));
+        .from(ticketTypes)
+        .where(eq(ticketTypes.eventId, id));
 
       if (ticketCount.count > data.capacity) {
-        logger.error(
-          `Cannot update event capacity to ${data.capacity} as it would be less than existing ticket count of ${ticketCount.count}`,
-        );
-        throw new Error(
+        throw new ValidationError(
           `Cannot reduce event capacity below existing ticket count of ${ticketCount.count}`,
         );
       }
     }
 
-    const result = await db
+    const [event] = await db
       .update(events)
-      .set(data)
+      .set({
+        ...data,
+        startTimestamp: data.startTimestamp ? new Date(data.startTimestamp) : undefined,
+        endTimestamp: data.endTimestamp ? new Date(data.endTimestamp) : undefined,
+        updatedAt: new Date(),
+      })
       .where(eq(events.id, id))
       .returning();
 
     logger.info(`Event ${id} updated successfully`);
-    return result[0];
+    return event;
   } catch (error) {
     logger.error(`Error updating event: ${error}`);
+    if (error instanceof ValidationError) {
+      throw error;
+    }
     throw new AppError(500, 'Failed to update event');
   }
 }
@@ -238,11 +289,11 @@ export async function deleteEvent(
 ) {
   try {
     logger.info(`Deleting event ${id} by user ${userId}`);
-    await checkEventOrganizer(userId, id, userRole);
+    await checkEventOwner(userId, id, userRole);
 
-    const result = await db.delete(events).where(eq(events.id, id)).returning();
+    const [event] = await db.delete(events).where(eq(events.id, id)).returning();
     logger.info(`Event ${id} deleted successfully`);
-    return result[0];
+    return event;
   } catch (error) {
     logger.error(`Error deleting event: ${error}`);
     throw new AppError(500, 'Failed to delete event');
@@ -252,31 +303,31 @@ export async function deleteEvent(
 export async function updateEventPublishStatus(
   userId: string,
   eventId: string,
-  isPublished: boolean,
+  status: 'draft' | 'published' | 'cancelled',
   userRole?: string,
 ) {
   try {
     logger.info(
-      `Updating event ${eventId} publish status to ${isPublished} by user ${userId}`,
+      `Updating event ${eventId} status to ${status} by user ${userId}`,
     );
-    await checkEventOrganizer(userId, eventId, userRole);
+    await checkEventOwner(userId, eventId, userRole);
 
     const [event] = await db
       .update(events)
       .set({
-        isPublished,
+        status,
         updatedAt: new Date(),
       })
       .where(eq(events.id, eventId))
       .returning();
 
     logger.info(
-      `Event ${eventId} publish status updated successfully to ${event.isPublished}`,
+      `Event ${eventId} status updated successfully to ${event.status}`,
     );
     return event;
   } catch (error) {
-    logger.error(`Error updating event publish status: ${error}`);
-    throw new AppError(500, 'Failed to update event publish status');
+    logger.error(`Error updating event status: ${error}`);
+    throw new AppError(500, 'Failed to update event status');
   }
 }
 
@@ -285,7 +336,7 @@ export async function checkEventExists(eventId: string) {
     .select({
       id: events.id,
       organizationId: events.organizationId,
-      isPublished: events.isPublished,
+      status: events.status,
     })
     .from(events)
     .where(eq(events.id, eventId))
@@ -296,4 +347,148 @@ export async function checkEventExists(eventId: string) {
   }
 
   return event;
+}
+
+export async function getEventsByOrganization(organizationId: string) {
+  try {
+    logger.info(`Fetching events for organization ${organizationId}`);
+    const result = await db
+      .select({
+        id: events.id,
+        title: events.title,
+        startTimestamp: events.startTimestamp,
+        status: events.status,
+        ticketsSold: sql<number>`COALESCE((
+          SELECT COUNT(*)
+          FROM ${tickets}
+          WHERE ${tickets.eventId} = ${events.id}
+          AND ${tickets.status} = 'booked'
+        ), 0)`,
+      })
+      .from(events)
+      .where(eq(events.organizationId, organizationId))
+      .orderBy(desc(events.createdAt));
+
+    logger.debug(`Successfully fetched ${result.length} events for organization ${organizationId}`);
+    return result;
+  } catch (error) {
+    logger.error(`Error fetching events for organization: ${error}`);
+    throw new AppError(500, 'Failed to fetch organization events');
+  }
+}
+
+export async function updateTicketType(eventId: string, ticketTypeId: string, data: Partial<TicketTypeSchema>) {
+  try {
+    logger.info(`Updating ticket type ${ticketTypeId} for event ${eventId}`);
+
+    return await db.transaction(async (tx) => {
+      // First verify the ticket type exists and belongs to the event
+      const [existingTicket] = await tx
+        .select()
+        .from(ticketTypes)
+        .where(
+          and(
+            eq(ticketTypes.id, ticketTypeId),
+            eq(ticketTypes.eventId, eventId)
+          )
+        )
+        .limit(1);
+
+      if (!existingTicket) {
+        throw new NotFoundError('Ticket type not found');
+      }
+
+      // If quantity is being updated, we need to handle ticket records
+      if (data.quantity !== undefined && data.quantity !== existingTicket.quantity) {
+        // Get count of booked tickets
+        const [{ bookedCount }] = await tx
+          .select({
+            bookedCount: count()
+          })
+          .from(tickets)
+          .where(
+            and(
+              eq(tickets.ticketTypeId, ticketTypeId),
+              eq(tickets.status, 'booked')
+            )
+          );
+
+        // Cannot reduce quantity below number of booked tickets
+        if (data.quantity < bookedCount) {
+          throw new ValidationError(`Cannot reduce quantity below number of booked tickets (${bookedCount})`);
+        }
+
+        // If increasing quantity, create new ticket records
+        if (data.quantity > existingTicket.quantity) {
+          const additionalTickets = data.quantity - existingTicket.quantity;
+          const ticketsToCreate = Array.from({ length: additionalTickets }, () => ({
+            eventId,
+            ticketTypeId,
+            name: existingTicket.name,
+            price: existingTicket.price,
+            currency: 'usd',
+            status: 'available' as const,
+          }));
+
+          await tx.insert(tickets).values(ticketsToCreate);
+        }
+        // If decreasing quantity, delete available tickets
+        else if (data.quantity < existingTicket.quantity) {
+          // Get the IDs of excess available tickets
+          const ticketsToDelete = await tx
+            .select({ id: tickets.id })
+            .from(tickets)
+            .where(
+              and(
+                eq(tickets.ticketTypeId, ticketTypeId),
+                eq(tickets.status, 'available')
+              )
+            )
+            .limit(existingTicket.quantity - data.quantity);
+
+          if (ticketsToDelete.length > 0) {
+            await tx
+              .delete(tickets)
+              .where(
+                inArray(
+                  tickets.id,
+                  ticketsToDelete.map(t => t.id)
+                )
+              );
+          }
+        }
+      }
+
+      // Update the ticket type
+      const [updatedTicketType] = await tx
+        .update(ticketTypes)
+        .set({
+          name: data.name,
+          description: data.description,
+          price: data.price ? Math.round(data.price * 100) : undefined,
+          quantity: data.quantity,
+          type: data.type,
+          saleStart: data.saleStart ? new Date(data.saleStart) : undefined,
+          saleEnd: data.saleEnd ? new Date(data.saleEnd) : undefined,
+          maxPerOrder: data.maxPerOrder,
+          minPerOrder: data.minPerOrder,
+          updatedAt: new Date(),
+        })
+        .where(eq(ticketTypes.id, ticketTypeId))
+        .returning();
+
+      logger.info(`Successfully updated ticket type ${ticketTypeId}`);
+
+      return {
+        ...updatedTicketType,
+        price: updatedTicketType.price / 100,
+      };
+    });
+  } catch (error) {
+    logger.error(`Error updating ticket type: ${error}`);
+    if (error instanceof NotFoundError || error instanceof ValidationError) {
+      throw error;
+    }
+    throw new AppError(500, 'Failed to update ticket type');
+  }
 }

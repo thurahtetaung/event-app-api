@@ -56,8 +56,8 @@ export async function createStripeConnectAccount(input: StripeAccountInput) {
     // Create an account link for onboarding
     const accountLink = await stripe.accountLinks.create({
       account: account.id,
-      refresh_url: `${env.API_URL}/api/stripe/onboard/refresh/${input.organizationId}`,
-      return_url: `${env.API_URL}/api/stripe/onboard/complete/${input.organizationId}`,
+      refresh_url: `${env.FRONTEND_URL || 'http://localhost:3000'}/organizer/settings?tab=payments&refresh=true`,
+      return_url: `${env.FRONTEND_URL || 'http://localhost:3000'}/organizer/settings?tab=payments&success=true`,
       type: 'account_onboarding',
     });
 
@@ -154,8 +154,8 @@ export async function refreshStripeOnboarding(organizationId: string) {
     // Create a new account link for onboarding
     const accountLink = await stripe.accountLinks.create({
       account: organization.stripeAccountId,
-      refresh_url: `${env.API_URL}/api/stripe/onboard/refresh/${organizationId}`,
-      return_url: `${env.API_URL}/api/stripe/onboard/complete/${organizationId}`,
+      refresh_url: `${env.FRONTEND_URL || 'http://localhost:3000'}/organizer/settings?tab=payments&refresh=true`,
+      return_url: `${env.FRONTEND_URL || 'http://localhost:3000'}/organizer/settings?tab=payments&success=true`,
       type: 'account_onboarding',
     });
 

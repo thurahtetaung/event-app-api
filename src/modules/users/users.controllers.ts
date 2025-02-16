@@ -7,7 +7,8 @@ import {
   resendRegistrationOTP,
   resendLoginOTP,
   findUserByEmail,
-  createUser
+  createUser,
+  refreshToken
 } from './users.services';
 import {
   loginUserBodySchema,
@@ -17,7 +18,7 @@ import {
   resendOTPBodySchema,
 } from './users.schema';
 import { logger } from '../../utils/logger';
-import { AppError } from '../../utils/errors';
+import { AppError, UnauthorizedError } from '../../utils/errors';
 import { users } from '../../db/schema';
 
 interface AuthenticatedRequest extends FastifyRequest {
@@ -173,5 +174,27 @@ export async function resendLoginOTPHandler(
       return reply.code(400).send({ message: error.message });
     }
     return reply.code(500).send({ message: 'Internal server error' });
+  }
+}
+
+export async function refreshTokenHandler(
+  request: FastifyRequest<{
+    Body: { refresh_token: string };
+  }>,
+  reply: FastifyReply,
+) {
+  try {
+    const { refresh_token } = request.body;
+    if (!refresh_token) {
+      return reply.code(400).send({ message: 'Refresh token is required' });
+    }
+
+    const result = await refreshToken(refresh_token);
+    return reply.code(200).send(result);
+  } catch (error) {
+    if (error instanceof UnauthorizedError) {
+      return reply.code(401).send({ message: error.message });
+    }
+    return reply.code(500).send({ message: 'Failed to refresh token' });
   }
 }
