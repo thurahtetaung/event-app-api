@@ -91,3 +91,23 @@ export type UpdateEventPublishStatusInput = z.infer<
 export const createTicketTypeJSONSchema = {
   body: zodToJsonSchema(createTicketTypeSchema.shape.body, 'createTicketTypeSchema'),
 };
+
+export const eventAnalyticsSchema = z.object({
+  totalTicketsSold: z.number(),
+  totalRevenue: z.number(),
+  ticketTypeStats: z.array(z.object({
+    id: z.string(),
+    name: z.string(),
+    type: z.enum(["paid", "free"]),
+    totalSold: z.number(),
+    totalRevenue: z.number(),
+    status: z.enum(["on-sale", "paused", "sold-out", "scheduled"]),
+  })),
+  salesByDay: z.array(z.object({
+    date: z.string(),
+    count: z.number(),
+    revenue: z.number(),
+  })),
+});
+
+export type EventAnalytics = z.infer<typeof eventAnalyticsSchema>;

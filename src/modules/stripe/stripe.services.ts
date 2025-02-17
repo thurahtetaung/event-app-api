@@ -80,7 +80,7 @@ export async function createStripeConnectAccount(input: StripeAccountInput) {
     };
   } catch (error) {
     logger.error(`Error creating Stripe Connect account: ${error}`);
-    if (error instanceof NotFoundError) {
+    if (error.name === 'NotFoundError') {
       throw error;
     }
     throw new AppError(
@@ -129,7 +129,7 @@ export async function completeStripeOnboarding(stripeAccountId: string) {
     return updatedOrg;
   } catch (error) {
     logger.error(`Error completing Stripe onboarding: ${error}`);
-    if (error instanceof NotFoundError || error instanceof ValidationError) {
+    if (error.name === 'NotFoundError' || error.name === 'ValidationError') {
       throw error;
     }
     throw new AppError(
@@ -162,7 +162,7 @@ export async function refreshStripeOnboarding(organizationId: string) {
     return { onboardingUrl: accountLink.url };
   } catch (error) {
     logger.error(`Error refreshing Stripe onboarding: ${error}`);
-    if (error instanceof NotFoundError) {
+    if (error.name === 'NotFoundError' || error.name === 'ValidationError') {
       throw error;
     }
     throw new AppError(
@@ -204,7 +204,7 @@ export async function updateStripeAccountStatus(
     return updatedOrg;
   } catch (error) {
     logger.error(`Error updating Stripe account status: ${error}`);
-    if (error instanceof NotFoundError || error instanceof ValidationError) {
+    if (error.name === 'NotFoundError' || error.name === 'ValidationError') {
       throw error;
     }
     throw new AppError(
@@ -300,9 +300,9 @@ export async function createCheckoutSession({
   } catch (error) {
     logger.error(`Error creating checkout session: ${error}`);
     if (
-      error instanceof NotFoundError ||
-      error instanceof ValidationError ||
-      error instanceof ForbiddenError
+      error.name === 'NotFoundError' ||
+      error.name === 'ValidationError' ||
+      error.name === 'ForbiddenError'
     ) {
       throw error;
     }
@@ -460,7 +460,11 @@ export async function handleStripeWebhook(
     logger.info(`Successfully processed webhook event ${event.id}`);
   } catch (error) {
     logger.error(`Error handling Stripe webhook: ${error}`);
-    if (error instanceof AppError) {
+    if (
+      error.name === 'NotFoundError' ||
+      error.name === 'ValidationError' ||
+      error.name === 'ForbiddenError'
+    ) {
       throw error;
     }
     throw new AppError(

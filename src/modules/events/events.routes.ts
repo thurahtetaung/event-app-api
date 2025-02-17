@@ -9,6 +9,7 @@ import {
   createTicketTypeHandler,
   getOrganizerEventsHandler,
   updateTicketTypeHandler,
+  getEventAnalyticsHandler,
 } from './events.controllers';
 import { authenticateRequest } from '../../middleware/auth';
 import { createEventSchema, createTicketTypeSchema, createTicketTypeJSONSchema } from './events.schema';
@@ -25,7 +26,24 @@ const EVENT_CATEGORIES = [
 
 export async function eventRoutes(app: FastifyInstance) {
   // Get all events (public)
-  app.get('/', getEventsHandler);
+  app.get('/', {
+    schema: {
+      querystring: {
+        type: 'object',
+        properties: {
+          category: { type: 'string' },
+          query: { type: 'string' },
+          sort: { type: 'string', enum: ['date', 'price-low', 'price-high'] },
+          date: { type: 'string' },
+          priceRange: { type: 'string', enum: ['all', 'free', 'paid'] },
+          minPrice: { type: 'string' },
+          maxPrice: { type: 'string' },
+          isOnline: { type: 'string', enum: ['true', 'false'] },
+          isInPerson: { type: 'string', enum: ['true', 'false'] }
+        }
+      }
+    }
+  }, getEventsHandler);
 
   // Get single event (public)
   app.get('/:id', getEventHandler);
@@ -153,6 +171,19 @@ export async function eventRoutes(app: FastifyInstance) {
         },
       },
     }, updateEventPublishStatusHandler);
+
+    // Get event analytics
+    app.get('/:id/analytics', {
+      schema: {
+        params: {
+          type: 'object',
+          required: ['id'],
+          properties: {
+            id: { type: 'string' },
+          },
+        },
+      },
+    }, getEventAnalyticsHandler);
 
     // Create ticket type
     app.post('/:eventId/ticket-types', {

@@ -1,6 +1,6 @@
 import { eq, InferInsertModel } from 'drizzle-orm';
 import { db } from '../../db';
-import { events, ticketTypes, users, organizations, tickets } from '../../db/schema';
+import { events, ticketTypes as dbTicketTypes, users, organizations, tickets } from '../../db/schema';
 import { logger } from '../../utils/logger';
 import { count, desc } from 'drizzle-orm';
 import {
@@ -14,6 +14,8 @@ import { createTicketsForTicketType } from '../tickets/tickets.services';
 import { sql } from 'drizzle-orm';
 import { and } from 'drizzle-orm';
 import { inArray } from 'drizzle-orm';
+import { sum } from 'drizzle-orm';
+import { or } from 'drizzle-orm';
 
 // Permission check utility
 export async function checkEventOwner(
@@ -112,56 +114,283 @@ export async function createEvent(data: EventSchema) {
     return event;
   } catch (error) {
     logger.error(`Error creating event: ${error}`);
-    if (error instanceof ValidationError) {
+    if (error.name === 'ValidationError') {
       throw error;
     }
     throw new AppError(500, 'Failed to create event');
   }
 }
 
+async function validateEventCapacity(eventId: string, newCapacity?: number) {
+  // Get total tickets created for this event
+  const [result] = await db
+    .select({
+      totalTickets: sum(dbTicketTypes.quantity),
+    })
+    .from(dbTicketTypes)
+    .where(eq(dbTicketTypes.eventId, eventId));
+
+  const totalTickets = Number(result?.totalTickets) || 0;
+
+  if (newCapacity !== undefined && totalTickets > newCapacity) {
+    throw new ValidationError(
+      `Cannot reduce event capacity to ${newCapacity}. There are already ${totalTickets} tickets created.`
+    );
+  }
+
+  return totalTickets;
+}
+
+async function validateTicketTypeCreation(eventId: string, quantity: number) {
+  // Get event capacity and current total tickets across all ticket types
+  const [event] = await db
+    .select({
+      capacity: events.capacity,
+      totalTickets: sql<number>`COALESCE((
+        SELECT SUM(${dbTicketTypes.quantity})
+        FROM ${dbTicketTypes}
+        WHERE ${dbTicketTypes.eventId} = ${eventId}
+      ), 0)`,
+    })
+    .from(events)
+    .where(eq(events.id, eventId))
+    .limit(1);
+
+  if (!event) {
+    throw new NotFoundError('Event not found');
+  }
+
+  const totalTickets = Number(event.totalTickets);
+  const newTotal = totalTickets + quantity;
+
+  if (newTotal > event.capacity) {
+    throw new ValidationError(
+      `Cannot create ${quantity} tickets. This would exceed the event capacity of ${event.capacity}. ` +
+      `Current total tickets: ${totalTickets}. Maximum additional tickets allowed: ${event.capacity - totalTickets}`
+    );
+  }
+}
+
 export async function createTicketType(data: TicketTypeSchema) {
   try {
-    logger.info('Creating new ticket type');
-    const [ticketType] = await db.insert(ticketTypes).values({
-      name: data.name,
-      description: data.description,
-      price: Math.round(data.price * 100), // Convert to cents
-      quantity: data.quantity,
-      type: data.type,
-      saleStart: new Date(data.saleStart),
-      saleEnd: new Date(data.saleEnd),
-      maxPerOrder: data.maxPerOrder,
-      minPerOrder: data.minPerOrder,
-      eventId: data.eventId,
-    }).returning();
+    // Validate ticket quantity against event capacity
+    await validateTicketTypeCreation(data.eventId, data.quantity);
 
-    logger.info(`Ticket type created successfully with ID ${ticketType.id}`);
+    // Validate sale period
+    const saleStart = new Date(data.saleStart);
+    const saleEnd = new Date(data.saleEnd);
 
-    // Create tickets for this ticket type
-    const tickets = await createTicketsForTicketType(ticketType.id, data.quantity);
-    logger.info(`Created ${tickets.length} tickets for ticket type ${ticketType.id}`);
+    if (saleEnd <= saleStart) {
+      throw new ValidationError('Sale end date must be after sale start date');
+    }
+
+    // Validate min/max per order
+    if (data.minPerOrder && data.maxPerOrder &&
+        Number(data.minPerOrder) > Number(data.maxPerOrder)) {
+      throw new ValidationError('Minimum per order cannot be greater than maximum per order');
+    }
+
+    if (data.maxPerOrder && Number(data.maxPerOrder) > data.quantity) {
+      throw new ValidationError('Maximum per order cannot exceed total quantity');
+    }
+
+    // Convert price to cents for storage
+    const priceInCents = Math.round(data.price * 100);
+
+    const [ticketType] = await db
+      .insert(dbTicketTypes)
+      .values({
+        ...data,
+        price: priceInCents,
+        saleStart: new Date(data.saleStart),
+        saleEnd: new Date(data.saleEnd),
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .returning();
+
+    // Create tickets using the dedicated service
+    await createTicketsForTicketType(ticketType.id, data.quantity);
 
     return {
       ...ticketType,
-      price: ticketType.price / 100, // Convert back to decimal
-      tickets,
+      price: ticketType.price / 100, // Convert back to dollars for frontend
     };
   } catch (error) {
     logger.error(`Error creating ticket type: ${error}`);
+    // Let validation, not found, and forbidden errors propagate as is
+    if (error.name === 'ValidationError' || error.name === 'NotFoundError' || error.name === 'ForbiddenError') {
+      throw error;
+    }
+    // For unknown errors, wrap in AppError
     throw new AppError(500, 'Failed to create ticket type');
   }
 }
 
-export async function getEvents() {
+export async function getEvents(params?: {
+  category?: string;
+  query?: string;
+  sort?: 'date' | 'price-low' | 'price-high';
+  date?: string;
+  priceRange?: 'all' | 'free' | 'paid';
+  minPrice?: string;
+  maxPrice?: string;
+  isOnline?: boolean | string;
+  isInPerson?: boolean | string;
+}) {
   try {
-    logger.info('Fetching all events');
-    const result = await db
-      .select()
-      .from(events)
-      .where(eq(events.status, 'published'));
+    // Safe parameter logging
+    const safeParams = {
+      ...params,
+      isOnline: params?.isOnline === 'true' || params?.isOnline === true || false,
+      isInPerson: params?.isInPerson === 'true' || params?.isInPerson === true || false
+    };
 
-    logger.debug(`Successfully fetched ${result.length} events`);
-    return result;
+    logger.info('Fetching events with params:',
+      Object.fromEntries(Object.entries(safeParams).filter(([_, v]) => v !== undefined))
+    );
+
+    // Build the where conditions
+    const conditions = [eq(events.status, 'published')];
+
+    // Category filter
+    if (params?.category && params.category !== 'All Categories') {
+      conditions.push(eq(events.category, params.category));
+      logger.debug('Added category filter:', params.category);
+    }
+
+    // Search query filter
+    if (params?.query) {
+      const searchTerm = `%${params.query.toLowerCase()}%`;
+      conditions.push(
+        sql`(
+          LOWER(${events.title}) LIKE ${searchTerm} OR
+          LOWER(${events.description}) LIKE ${searchTerm} OR
+          LOWER(${events.venue}) LIKE ${searchTerm} OR
+          LOWER(${events.address}) LIKE ${searchTerm} OR
+          LOWER(${events.category}) LIKE ${searchTerm}
+        )`
+      );
+      logger.debug('Added search filter:', params.query);
+    }
+
+    // Date filter
+    if (params?.date) {
+      conditions.push(sql`DATE(${events.startTimestamp}) = ${params.date}`);
+      logger.debug('Added date filter:', params.date);
+    }
+
+    // Online/In-person filter
+    if (params?.isOnline) {
+      conditions.push(eq(events.isOnline, true));
+      logger.debug('Added online filter');
+    } else if (params?.isInPerson) {
+      conditions.push(eq(events.isOnline, false));
+      logger.debug('Added in-person filter');
+    }
+
+    // Price range filters
+    if (params?.priceRange === 'free') {
+      conditions.push(sql`NOT EXISTS (
+        SELECT 1 FROM ${dbTicketTypes}
+        WHERE ${dbTicketTypes.eventId} = ${events.id}
+        AND ${dbTicketTypes.price} > 0
+      )`);
+      logger.debug('Added free price filter');
+    } else if (params?.priceRange === 'paid') {
+      conditions.push(sql`EXISTS (
+        SELECT 1 FROM ${dbTicketTypes}
+        WHERE ${dbTicketTypes.eventId} = ${events.id}
+        AND ${dbTicketTypes.price} > 0
+      )`);
+      logger.debug('Added paid price filter');
+    }
+
+    // Min/Max price filters
+    if (params?.minPrice) {
+      const minPriceInCents = Math.round(parseFloat(params.minPrice) * 100);
+      conditions.push(sql`EXISTS (
+        SELECT 1 FROM ${dbTicketTypes}
+        WHERE ${dbTicketTypes.eventId} = ${events.id}
+        AND ${dbTicketTypes.price} >= ${minPriceInCents}
+      )`);
+      logger.debug('Added min price filter:', params.minPrice);
+    }
+
+    if (params?.maxPrice) {
+      const maxPriceInCents = Math.round(parseFloat(params.maxPrice) * 100);
+      conditions.push(sql`EXISTS (
+        SELECT 1 FROM ${dbTicketTypes}
+        WHERE ${dbTicketTypes.eventId} = ${events.id}
+        AND ${dbTicketTypes.price} <= ${maxPriceInCents}
+      )`);
+      logger.debug('Added max price filter:', params.maxPrice);
+    }
+
+    logger.debug('Number of conditions:', conditions.length);
+
+    // Create the base query with all conditions
+    const baseQuery = db
+      .select({
+        event: events,
+        organization: organizations,
+        lowestPrice: sql<number>`COALESCE(
+          (
+            SELECT MIN(${dbTicketTypes.price})
+            FROM ${dbTicketTypes}
+            WHERE ${dbTicketTypes.eventId} = ${events.id}
+          ),
+          0
+        )`,
+      })
+      .from(events)
+      .leftJoin(organizations, eq(events.organizationId, organizations.id))
+      .where(and(...conditions));
+
+    // Add ordering based on sort parameter
+    const result = await (params?.sort === 'price-low'
+      ? baseQuery.orderBy(sql`COALESCE(
+          (
+            SELECT MIN(${dbTicketTypes.price})
+            FROM ${dbTicketTypes}
+            WHERE ${dbTicketTypes.eventId} = ${events.id}
+          ),
+          0
+        ) ASC`)
+      : params?.sort === 'price-high'
+      ? baseQuery.orderBy(sql`COALESCE(
+          (
+            SELECT MIN(${dbTicketTypes.price})
+            FROM ${dbTicketTypes}
+            WHERE ${dbTicketTypes.eventId} = ${events.id}
+          ),
+          0
+        ) DESC`)
+      : baseQuery.orderBy(desc(events.startTimestamp)));
+
+    // Transform result to include ticket types
+    const eventsWithTickets = await Promise.all(
+      result.map(async ({ event, organization, lowestPrice }) => {
+        const eventTickets = await db
+          .select()
+          .from(dbTicketTypes)
+          .where(eq(dbTicketTypes.eventId, event.id));
+
+        return {
+          ...event,
+          organization: organization ? {
+            name: organization.name,
+          } : undefined,
+          ticketTypes: eventTickets.map(tt => ({
+            ...tt,
+            price: Number(tt.price) / 100, // Convert cents to dollars
+          })),
+        };
+      })
+    );
+
+    logger.debug(`Successfully fetched ${eventsWithTickets.length} events`);
+    return eventsWithTickets;
   } catch (error) {
     logger.error(`Error fetching events: ${error}`);
     throw new AppError(500, 'Failed to fetch events');
@@ -172,8 +401,15 @@ export async function getEventById(id: string) {
   try {
     logger.info(`Fetching event by ID ${id}`);
     const [event] = await db
-      .select()
+      .select({
+        event: events,
+        organization: organizations,
+      })
       .from(events)
+      .leftJoin(
+        organizations,
+        eq(events.organizationId, organizations.id),
+      )
       .where(eq(events.id, id))
       .limit(1);
 
@@ -184,52 +420,58 @@ export async function getEventById(id: string) {
     // Get ticket types with sold count
     const ticketTypesList = await db
       .select({
-        id: ticketTypes.id,
-        name: ticketTypes.name,
-        description: ticketTypes.description,
-        price: ticketTypes.price,
-        quantity: ticketTypes.quantity,
-        type: ticketTypes.type,
-        saleStart: ticketTypes.saleStart,
-        saleEnd: ticketTypes.saleEnd,
-        maxPerOrder: ticketTypes.maxPerOrder,
-        minPerOrder: ticketTypes.minPerOrder,
-        eventId: ticketTypes.eventId,
-        createdAt: ticketTypes.createdAt,
-        updatedAt: ticketTypes.updatedAt,
+        id: dbTicketTypes.id,
+        name: dbTicketTypes.name,
+        description: dbTicketTypes.description,
+        price: dbTicketTypes.price,
+        quantity: dbTicketTypes.quantity,
+        type: dbTicketTypes.type,
+        saleStart: dbTicketTypes.saleStart,
+        saleEnd: dbTicketTypes.saleEnd,
+        maxPerOrder: dbTicketTypes.maxPerOrder,
+        minPerOrder: dbTicketTypes.minPerOrder,
+        eventId: dbTicketTypes.eventId,
+        createdAt: dbTicketTypes.createdAt,
+        updatedAt: dbTicketTypes.updatedAt,
         soldCount: sql<number>`COALESCE((
           SELECT COUNT(*)
           FROM ${tickets}
-          WHERE ${tickets.ticketTypeId} = ${ticketTypes.id}
+          WHERE ${tickets.ticketTypeId} = ${dbTicketTypes.id}
           AND ${tickets.status} = 'booked'
         ), 0)`,
         status: sql<'on-sale' | 'paused' | 'sold-out' | 'scheduled'>`
           CASE
-            WHEN ${ticketTypes.quantity} <= (
+            WHEN ${dbTicketTypes.quantity} <= (
               SELECT COUNT(*)
               FROM ${tickets}
-              WHERE ${tickets.ticketTypeId} = ${ticketTypes.id}
+              WHERE ${tickets.ticketTypeId} = ${dbTicketTypes.id}
               AND ${tickets.status} = 'booked'
             ) THEN 'sold-out'
-            WHEN ${ticketTypes.saleStart} > NOW() THEN 'scheduled'
-            WHEN ${ticketTypes.saleEnd} < NOW() THEN 'paused'
+            WHEN ${dbTicketTypes.saleStart} > NOW() THEN 'scheduled'
+            WHEN ${dbTicketTypes.saleEnd} < NOW() THEN 'paused'
             ELSE 'on-sale'
           END
         `
       })
-      .from(ticketTypes)
-      .where(eq(ticketTypes.eventId, id));
+      .from(dbTicketTypes)
+      .where(eq(dbTicketTypes.eventId, id));
 
     return {
-      ...event,
+      ...event.event,
+      organization: event.organization ? {
+        id: event.organization.id,
+        name: event.organization.name,
+        website: event.organization.website,
+        socialLinks: event.organization.socialLinks,
+      } : undefined,
       ticketTypes: ticketTypesList.map(t => ({
         ...t,
-        price: Number(t.price) / 100, // Convert back to decimal
+        price: Number(t.price) / 100  // Convert from cents to dollars
       })),
     };
   } catch (error) {
     logger.error(`Error getting event: ${error}`);
-    if (error instanceof NotFoundError) {
+    if (error.name === 'NotFoundError') {
       throw error;
     }
     throw new AppError(500, 'Failed to fetch event');
@@ -243,24 +485,33 @@ export async function updateEvent(
   userRole?: string,
 ) {
   try {
-    logger.info(`Updating event ${id} by user ${userId}`);
     await checkEventOwner(userId, id, userRole);
 
-    // If capacity is being updated, check existing tickets
-    if (data.capacity !== undefined) {
-      const [ticketCount] = await db
-        .select({ count: count() })
-        .from(ticketTypes)
-        .where(eq(ticketTypes.eventId, id));
-
-      if (ticketCount.count > data.capacity) {
-        throw new ValidationError(
-          `Cannot reduce event capacity below existing ticket count of ${ticketCount.count}`,
-        );
+    // Validate start and end timestamps
+    if (data.startTimestamp && data.endTimestamp) {
+      const startDate = new Date(data.startTimestamp);
+      const endDate = new Date(data.endTimestamp);
+      if (endDate <= startDate) {
+        throw new ValidationError('End time must be after start time');
       }
     }
 
-    const [event] = await db
+    // If capacity is being updated, validate it
+    if (data.capacity !== undefined) {
+      await validateEventCapacity(id, data.capacity);
+    }
+
+    // Validate venue and address for in-person events
+    if (data.isOnline === false) {
+      if (!data.venue) {
+        throw new ValidationError('Venue is required for in-person events');
+      }
+      if (!data.address) {
+        throw new ValidationError('Address is required for in-person events');
+      }
+    }
+
+    const [updatedEvent] = await db
       .update(events)
       .set({
         ...data,
@@ -271,13 +522,14 @@ export async function updateEvent(
       .where(eq(events.id, id))
       .returning();
 
-    logger.info(`Event ${id} updated successfully`);
-    return event;
+    return updatedEvent;
   } catch (error) {
     logger.error(`Error updating event: ${error}`);
-    if (error instanceof ValidationError) {
+    // Let validation, not found, and forbidden errors propagate as is
+    if (error.name === 'ValidationError' || error.name === 'NotFoundError' || error.name === 'ForbiddenError') {
       throw error;
     }
+    // For unknown errors, wrap in AppError
     throw new AppError(500, 'Failed to update event');
   }
 }
@@ -379,116 +631,240 @@ export async function getEventsByOrganization(organizationId: string) {
 
 export async function updateTicketType(eventId: string, ticketTypeId: string, data: Partial<TicketTypeSchema>) {
   try {
-    logger.info(`Updating ticket type ${ticketTypeId} for event ${eventId}`);
+    // Get current ticket type
+    const [currentTicketType] = await db
+      .select({
+        quantity: dbTicketTypes.quantity,
+        soldCount: sql<number>`COALESCE((
+          SELECT COUNT(*)
+          FROM ${tickets}
+          WHERE ${tickets.ticketTypeId} = ${dbTicketTypes.id}
+          AND ${tickets.status} = 'booked'
+        ), 0)`,
+      })
+      .from(dbTicketTypes)
+      .where(eq(dbTicketTypes.id, ticketTypeId))
+      .limit(1);
 
-    return await db.transaction(async (tx) => {
-      // First verify the ticket type exists and belongs to the event
-      const [existingTicket] = await tx
-        .select()
-        .from(ticketTypes)
-        .where(
-          and(
-            eq(ticketTypes.id, ticketTypeId),
-            eq(ticketTypes.eventId, eventId)
-          )
-        )
+    if (!currentTicketType) {
+      throw new NotFoundError('Ticket type not found');
+    }
+
+    // If quantity is being updated, validate it
+    if (data.quantity !== undefined) {
+      // Check if new quantity is less than sold tickets
+      if (data.quantity < currentTicketType.soldCount) {
+        throw new ValidationError(
+          `Cannot reduce quantity to ${data.quantity}. There are already ${currentTicketType.soldCount} tickets sold.`
+        );
+      }
+
+      // Get total tickets for all ticket types
+      const [totalResult] = await db
+        .select({
+          totalTickets: sql<number>`COALESCE(SUM(${dbTicketTypes.quantity}), 0)`,
+        })
+        .from(dbTicketTypes)
+        .where(eq(dbTicketTypes.eventId, eventId));
+
+      // Get event capacity
+      const [event] = await db
+        .select({
+          capacity: events.capacity,
+        })
+        .from(events)
+        .where(eq(events.id, eventId))
         .limit(1);
 
-      if (!existingTicket) {
-        throw new NotFoundError('Ticket type not found');
+      if (!event) {
+        throw new NotFoundError('Event not found');
       }
 
-      // If quantity is being updated, we need to handle ticket records
-      if (data.quantity !== undefined && data.quantity !== existingTicket.quantity) {
-        // Get count of booked tickets
-        const [{ bookedCount }] = await tx
-          .select({
-            bookedCount: count()
-          })
-          .from(tickets)
-          .where(
-            and(
-              eq(tickets.ticketTypeId, ticketTypeId),
-              eq(tickets.status, 'booked')
-            )
-          );
+      const currentTotal = Number(totalResult.totalTickets);
+      const quantityDiff = data.quantity - currentTicketType.quantity;
+      const newTotal = currentTotal + quantityDiff;
 
-        // Cannot reduce quantity below number of booked tickets
-        if (data.quantity < bookedCount) {
-          throw new ValidationError(`Cannot reduce quantity below number of booked tickets (${bookedCount})`);
-        }
-
-        // If increasing quantity, create new ticket records
-        if (data.quantity > existingTicket.quantity) {
-          const additionalTickets = data.quantity - existingTicket.quantity;
-          const ticketsToCreate = Array.from({ length: additionalTickets }, () => ({
-            eventId,
-            ticketTypeId,
-            name: existingTicket.name,
-            price: existingTicket.price,
-            currency: 'usd',
-            status: 'available' as const,
-          }));
-
-          await tx.insert(tickets).values(ticketsToCreate);
-        }
-        // If decreasing quantity, delete available tickets
-        else if (data.quantity < existingTicket.quantity) {
-          // Get the IDs of excess available tickets
-          const ticketsToDelete = await tx
-            .select({ id: tickets.id })
-            .from(tickets)
-            .where(
-              and(
-                eq(tickets.ticketTypeId, ticketTypeId),
-                eq(tickets.status, 'available')
-              )
-            )
-            .limit(existingTicket.quantity - data.quantity);
-
-          if (ticketsToDelete.length > 0) {
-            await tx
-              .delete(tickets)
-              .where(
-                inArray(
-                  tickets.id,
-                  ticketsToDelete.map(t => t.id)
-                )
-              );
-          }
-        }
+      if (newTotal > event.capacity) {
+        throw new ValidationError(
+          `Cannot update quantity. Total tickets would exceed event capacity of ${event.capacity}. ` +
+          `Current total tickets: ${currentTotal}. Maximum additional tickets allowed: ${event.capacity - currentTotal}`
+        );
       }
+    }
 
-      // Update the ticket type
-      const [updatedTicketType] = await tx
-        .update(ticketTypes)
+    // Validate sale period if being updated
+    if (data.saleStart && data.saleEnd) {
+      const saleStart = new Date(data.saleStart);
+      const saleEnd = new Date(data.saleEnd);
+      if (saleEnd <= saleStart) {
+        throw new ValidationError('Sale end date must be after sale start date');
+      }
+    }
+
+    // Validate min/max per order
+    if (data.minPerOrder && data.maxPerOrder &&
+        Number(data.minPerOrder) > Number(data.maxPerOrder)) {
+      throw new ValidationError('Minimum per order cannot be greater than maximum per order');
+    }
+
+    if (data.maxPerOrder && data.quantity &&
+        Number(data.maxPerOrder) > data.quantity) {
+      throw new ValidationError('Maximum per order cannot exceed total quantity');
+    }
+
+    // Calculate the new price in cents
+    const newPriceInCents = data.type === 'free' ? 0 : data.price ? Math.round(data.price * 100) : undefined;
+
+    // Set price to 0 if type is being changed to 'free'
+    const updateData = {
+      ...data,
+      price: newPriceInCents,
+      saleStart: data.saleStart ? new Date(data.saleStart) : undefined,
+      saleEnd: data.saleEnd ? new Date(data.saleEnd) : undefined,
+      updatedAt: new Date(),
+    };
+
+    const [updatedTicketType] = await db
+      .update(dbTicketTypes)
+      .set(updateData)
+      .where(eq(dbTicketTypes.id, ticketTypeId))
+      .returning();
+
+    // If price is being updated, update all available tickets
+    if (newPriceInCents !== undefined) {
+      await db
+        .update(tickets)
         .set({
-          name: data.name,
-          description: data.description,
-          price: data.price ? Math.round(data.price * 100) : undefined,
-          quantity: data.quantity,
-          type: data.type,
-          saleStart: data.saleStart ? new Date(data.saleStart) : undefined,
-          saleEnd: data.saleEnd ? new Date(data.saleEnd) : undefined,
-          maxPerOrder: data.maxPerOrder,
-          minPerOrder: data.minPerOrder,
+          price: newPriceInCents,
           updatedAt: new Date(),
         })
-        .where(eq(ticketTypes.id, ticketTypeId))
-        .returning();
+        .where(
+          and(
+            eq(tickets.ticketTypeId, ticketTypeId),
+            eq(tickets.status, 'available')
+          )
+        );
+    }
 
-      logger.info(`Successfully updated ticket type ${ticketTypeId}`);
+    // If quantity increased, create additional tickets
+    if (data.quantity && data.quantity > currentTicketType.quantity) {
+      const additionalTickets = data.quantity - currentTicketType.quantity;
+      const ticketsToCreate = Array.from({ length: additionalTickets }, () => ({
+        eventId,
+        ticketTypeId,
+        name: updatedTicketType.name,
+        price: updatedTicketType.price,
+        currency: 'usd',
+        status: 'available' as const,
+      }));
 
-      return {
-        ...updatedTicketType,
-        price: updatedTicketType.price / 100,
-      };
-    });
+      await db.insert(tickets).values(ticketsToCreate);
+    }
+
+    return {
+      ...updatedTicketType,
+      price: updatedTicketType.price / 100, // Convert back to dollars for frontend
+    };
   } catch (error) {
     logger.error(`Error updating ticket type: ${error}`);
-    if (error instanceof NotFoundError || error instanceof ValidationError) {
+    // Let validation, not found, and forbidden errors propagate as is
+    if (error.name === 'ValidationError' || error.name === 'NotFoundError' || error.name === 'ForbiddenError') {
       throw error;
     }
+    // For unknown errors, wrap in AppError
     throw new AppError(500, 'Failed to update ticket type');
+  }
+}
+
+export async function getEventAnalytics(eventId: string) {
+  try {
+    logger.info(`Getting analytics for event ${eventId}`);
+
+    // Get total tickets sold and revenue
+    const [totals] = await db
+      .select({
+        totalTicketsSold: count(tickets.id),
+        totalRevenue: sql<number>`COALESCE(SUM(${tickets.price}), 0)`,
+      })
+      .from(tickets)
+      .where(
+        and(
+          eq(tickets.eventId, eventId),
+          eq(tickets.status, 'booked')
+        )
+      );
+
+    // Get stats per ticket type
+    const ticketTypesList = await db
+      .select({
+        id: dbTicketTypes.id,
+        name: dbTicketTypes.name,
+        type: dbTicketTypes.type,
+        quantity: dbTicketTypes.quantity,
+        totalSold: sql<number>`COALESCE((
+          SELECT COUNT(*)
+          FROM ${tickets}
+          WHERE ${tickets.ticketTypeId} = ${dbTicketTypes.id}
+          AND ${tickets.status} = 'booked'
+        ), 0)`,
+        totalRevenue: sql<number>`COALESCE((
+          SELECT SUM(${tickets.price})
+          FROM ${tickets}
+          WHERE ${tickets.ticketTypeId} = ${dbTicketTypes.id}
+          AND ${tickets.status} = 'booked'
+        ), 0)`,
+        status: sql<'on-sale' | 'paused' | 'sold-out' | 'scheduled'>`
+          CASE
+            WHEN ${dbTicketTypes.quantity} <= (
+              SELECT COUNT(*)
+              FROM ${tickets}
+              WHERE ${tickets.ticketTypeId} = ${dbTicketTypes.id}
+              AND ${tickets.status} = 'booked'
+            ) THEN 'sold-out'
+            WHEN ${dbTicketTypes.saleStart} > NOW() THEN 'scheduled'
+            WHEN ${dbTicketTypes.saleEnd} < NOW() THEN 'paused'
+            ELSE 'on-sale'
+          END
+        `,
+      })
+      .from(dbTicketTypes)
+      .where(eq(dbTicketTypes.eventId, eventId));
+
+    // Get sales by day for the last 30 days
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
+    const salesByDay = await db
+      .select({
+        date: sql<string>`DATE(${tickets.bookedAt})::text`,
+        count: count(tickets.id),
+        revenue: sql<number>`COALESCE(SUM(${tickets.price}), 0)`,
+      })
+      .from(tickets)
+      .where(
+        and(
+          eq(tickets.eventId, eventId),
+          eq(tickets.status, 'booked'),
+          sql`${tickets.bookedAt} >= ${thirtyDaysAgo}`
+        )
+      )
+      .groupBy(sql`DATE(${tickets.bookedAt})`)
+      .orderBy(sql`DATE(${tickets.bookedAt})`);
+
+    return {
+      totalTicketsSold: Number(totals.totalTicketsSold),
+      totalRevenue: Number(totals.totalRevenue) / 100, // Convert from cents to dollars
+      ticketTypeStats: ticketTypesList.map(stat => ({
+        ...stat,
+        totalRevenue: Number(stat.totalRevenue) / 100, // Convert from cents to dollars
+      })),
+      salesByDay: salesByDay.map(day => ({
+        ...day,
+        revenue: Number(day.revenue) / 100, // Convert from cents to dollars
+      })),
+    };
+  } catch (error) {
+    logger.error(`Error getting event analytics: ${error}`);
+    throw new AppError(500, 'Failed to get event analytics');
   }
 }

@@ -7,9 +7,11 @@ import {
   updateEvent,
   updateEventPublishStatus,
   checkEventExists,
+  checkEventOwner,
   createTicketType,
   getEventsByOrganization,
   updateTicketType,
+  getEventAnalytics,
 } from './events.services';
 import {
   EventSchema,
@@ -20,6 +22,7 @@ import { logger } from '../../utils/logger';
 import { eq } from 'drizzle-orm';
 import { organizations, events } from '../../db/schema';
 import { db } from '../../db';
+import { ValidationError, NotFoundError, ForbiddenError } from '../../utils/errors';
 
 interface RequestWithParams {
   Params: {
@@ -61,6 +64,15 @@ export async function createEventHandler(
     return reply.code(201).send(event);
   } catch (error) {
     logger.error(`Error creating event: ${error}`);
+    if (error.name === 'ValidationError') {
+      return reply.code(400).send({ error: error.message });
+    }
+    if (error.name === 'NotFoundError') {
+      return reply.code(404).send({ error: error.message });
+    }
+    if (error.name === 'ForbiddenError') {
+      return reply.code(403).send({ error: error.message });
+    }
     return reply.code(500).send({ error: 'Failed to create event' });
   }
 }
@@ -70,7 +82,21 @@ export async function getEventsHandler(
   reply: FastifyReply,
 ) {
   try {
-    const events = await getEvents();
+    const queryParams = request.query as {
+      category?: string;
+      query?: string;
+      sort?: 'date' | 'price-low' | 'price-high';
+      date?: string;
+      priceRange?: 'all' | 'free' | 'paid';
+      minPrice?: string;
+      maxPrice?: string;
+      isOnline?: string;
+      isInPerson?: string;
+    };
+
+    logger.debug('Received query params:', queryParams);
+
+    const events = await getEvents(queryParams);
     return reply.code(200).send(events);
   } catch (error) {
     logger.error(`Error getting events: ${error}`);
@@ -90,6 +116,9 @@ export async function getEventHandler(
     return reply.code(200).send(event);
   } catch (error) {
     logger.error(`Error getting event: ${error}`);
+    if (error.name === 'NotFoundError') {
+      return reply.code(404).send({ error: error.message });
+    }
     return reply.code(500).send({ error: 'Failed to get event' });
   }
 }
@@ -112,6 +141,15 @@ export async function updateEventHandler(
     return reply.code(200).send(event);
   } catch (error) {
     logger.error(`Error updating event: ${error}`);
+    if (error.name === 'ValidationError') {
+      return reply.code(400).send({ error: error.message });
+    }
+    if (error.name === 'NotFoundError') {
+      return reply.code(404).send({ error: error.message });
+    }
+    if (error.name === 'ForbiddenError') {
+      return reply.code(403).send({ error: error.message });
+    }
     return reply.code(500).send({ error: 'Failed to update event' });
   }
 }
@@ -197,6 +235,15 @@ export async function createTicketTypeHandler(
     return reply.code(201).send(ticketType);
   } catch (error) {
     logger.error(`Error creating ticket type: ${error}`);
+    if (error.name === 'ValidationError') {
+      return reply.code(400).send({ error: error.message });
+    }
+    if (error.name === 'NotFoundError') {
+      return reply.code(404).send({ error: error.message });
+    }
+    if (error.name === 'ForbiddenError') {
+      return reply.code(403).send({ error: error.message });
+    }
     return reply.code(500).send({ error: 'Failed to create ticket type' });
   }
 }
@@ -265,6 +312,32 @@ export async function updateTicketTypeHandler(
     return reply.code(200).send(ticketType);
   } catch (error) {
     logger.error(`Error updating ticket type: ${error}`);
+    if (error.name === 'ValidationError') {
+      return reply.code(400).send({ error: error.message });
+    }
+    if (error.name === 'NotFoundError') {
+      return reply.code(404).send({ error: error.message });
+    }
+    if (error.name === 'ForbiddenError') {
+      return reply.code(403).send({ error: error.message });
+    }
     return reply.code(500).send({ error: 'Failed to update ticket type' });
+  }
+}
+
+export async function getEventAnalyticsHandler(
+  request: FastifyRequest<{
+    Params: { id: string };
+  }>,
+  reply: FastifyReply,
+) {
+  try {
+    const userId = request.user.id;
+    await checkEventOwner(userId, request.params.id, request.user.role);
+    const analytics = await getEventAnalytics(request.params.id);
+    return reply.code(200).send(analytics);
+  } catch (error) {
+    logger.error(`Error getting event analytics: ${error}`);
+    return reply.code(500).send({ error: 'Failed to get event analytics' });
   }
 }
