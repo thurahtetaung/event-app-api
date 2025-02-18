@@ -6,6 +6,7 @@ import {
   getAvailableTickets,
   getTicketsByUser,
   purchaseTickets,
+  reserveTickets,
 } from './tickets.services';
 import { logger } from '../../utils/logger';
 
@@ -107,5 +108,26 @@ export async function purchaseTicketsHandler(
       return reply.code(400).send({ message: error.message });
     }
     return reply.code(500).send({ message: 'Internal server error' });
+  }
+}
+
+export async function reserveTicketsHandler(
+  request: FastifyRequest<{
+    Body: {
+      eventId: string;
+      tickets: Array<{ quantity: number; ticketTypeId: string }>;
+    };
+  }>,
+  reply: FastifyReply,
+) {
+  try {
+    const result = await reserveTickets(request.user.id, request.body);
+    return reply.code(200).send(result);
+  } catch (error) {
+    logger.error(`Error reserving tickets: ${error}`);
+    if (error instanceof Error) {
+      return reply.code(400).send({ message: error.message });
+    }
+    return reply.code(500).send({ message: 'Failed to reserve tickets' });
   }
 }

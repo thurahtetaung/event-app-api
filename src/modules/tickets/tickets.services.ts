@@ -32,6 +32,19 @@ interface PurchaseTicketsInput {
   tickets: { ticketId: string }[];
 }
 
+interface ReserveTicketsInput {
+  eventId: string;
+  tickets: Array<{ ticketTypeId: string; quantity: number }>;
+}
+
+interface ReservedTicket {
+  id: string;
+  ticketTypeId: string;
+  name: string;
+  price: number;
+  quantity: number;
+}
+
 export async function createTicketsForTicketType(ticketTypeId: string, quantity: number) {
   try {
     logger.info(`Creating ${quantity} tickets for ticket type ${ticketTypeId}`);
@@ -178,10 +191,10 @@ export async function purchaseTickets(
         throw new Error('Event is not published');
       }
 
-      // Step 2: Check if any tickets are already reserved
+      // Step 2: Check if any tickets are already reserved by someone else
       for (const ticket of input.tickets) {
-        if (await isTicketReserved(ticket.ticketId)) {
-          throw new Error('Some tickets are already reserved');
+        if (await isTicketReserved(ticket.ticketId, userId)) {
+          throw new Error('Some tickets are already reserved by another user');
         }
       }
 
@@ -413,6 +426,105 @@ export async function handleFailedPayment(paymentIntentId: string) {
     });
   } catch (error) {
     logger.error(`Error handling failed payment: ${error}`);
+    throw error;
+  }
+}
+
+export async function reserveTickets(
+  userId: string,
+  input: ReserveTicketsInput,
+) {
+  try {
+    return await db.transaction(async (tx) => {
+      logger.info(`Attempting to reserve tickets for event ${input.eventId}, user ${userId}`);
+
+      // Step 1: Verify the event exists and is published
+      const [event] = await tx
+        .select()
+        .from(events)
+        .where(eq(events.id, input.eventId))
+        .limit(1);
+
+      if (!event) {
+        throw new Error('Event not found');
+      }
+
+      if (event.status !== 'published') {
+        throw new Error('Event is not published');
+      }
+
+      const reservedTickets: ReservedTicket[] = [];
+
+      // Process each ticket request
+      for (const ticketRequest of input.tickets) {
+        // Get available tickets with ticket type details
+        const availableTickets = await tx
+          .select({
+            ticket: tickets,
+            ticketType: ticketTypes
+          })
+          .from(tickets)
+          .innerJoin(
+            ticketTypes,
+            eq(tickets.ticketTypeId, ticketTypes.id)
+          )
+          .where(
+            and(
+              eq(tickets.ticketTypeId, ticketRequest.ticketTypeId),
+              eq(tickets.status, 'available'),
+            ),
+          )
+          .orderBy(tickets.id);
+
+        // Check which tickets are not already reserved in Redis
+        const ticketReservationChecks = await Promise.all(
+          availableTickets.map(async ({ ticket }) => ({
+            ticket,
+            isReserved: await isTicketReserved(ticket.id)
+          }))
+        );
+
+        const trulyAvailableTickets = availableTickets.filter((_, index) =>
+          !ticketReservationChecks[index].isReserved
+        );
+
+        if (trulyAvailableTickets.length < ticketRequest.quantity) {
+          await releaseUserTickets(userId);
+          throw new Error(`Not enough tickets available. Requested: ${ticketRequest.quantity}, Available: ${trulyAvailableTickets.length}`);
+        }
+
+        // Take only the number of tickets we need
+        const ticketsToReserve = trulyAvailableTickets.slice(0, ticketRequest.quantity);
+
+        // Reserve all tickets at once
+        const reservationResults = await Promise.all(
+          ticketsToReserve.map(({ ticket }) => reserveTicket(ticket.id, userId))
+        );
+
+        if (reservationResults.some(result => !result)) {
+          await releaseUserTickets(userId);
+          throw new Error('Failed to reserve tickets');
+        }
+
+        // Add successfully reserved tickets to our list
+        const ticketType = ticketsToReserve[0].ticketType;
+        reservedTickets.push({
+          id: ticketsToReserve[0].ticket.id,
+          ticketTypeId: ticketType.id,
+          name: ticketType.name,
+          price: Number(ticketType.price) / 100,
+          quantity: ticketRequest.quantity
+        });
+      }
+
+      return {
+        success: true,
+        message: 'Tickets reserved successfully',
+        tickets: reservedTickets,
+      };
+    });
+  } catch (error) {
+    logger.error('Error reserving tickets:', error);
     throw error;
   }
 }

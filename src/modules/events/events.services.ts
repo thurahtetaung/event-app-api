@@ -16,6 +16,7 @@ import { and } from 'drizzle-orm';
 import { inArray } from 'drizzle-orm';
 import { sum } from 'drizzle-orm';
 import { or } from 'drizzle-orm';
+import { getReservedTicketCount } from '../../utils/redis';
 
 // Permission check utility
 export async function checkEventOwner(
@@ -456,6 +457,18 @@ export async function getEventById(id: string) {
       .from(dbTicketTypes)
       .where(eq(dbTicketTypes.eventId, id));
 
+    // Get Redis reservation counts for each ticket type
+    const ticketTypesWithReservations = await Promise.all(
+      ticketTypesList.map(async (ticketType) => {
+        const reservedCount = await getReservedTicketCount(ticketType.id);
+        return {
+          ...ticketType,
+          price: Number(ticketType.price) / 100,  // Convert from cents to dollars
+          soldCount: Number(ticketType.soldCount) + reservedCount // Add reserved count to sold count
+        };
+      })
+    );
+
     return {
       ...event.event,
       organization: event.organization ? {
@@ -464,10 +477,7 @@ export async function getEventById(id: string) {
         website: event.organization.website,
         socialLinks: event.organization.socialLinks,
       } : undefined,
-      ticketTypes: ticketTypesList.map(t => ({
-        ...t,
-        price: Number(t.price) / 100  // Convert from cents to dollars
-      })),
+      ticketTypes: ticketTypesWithReservations,
     };
   } catch (error) {
     logger.error(`Error getting event: ${error}`);

@@ -5,6 +5,7 @@ import {
   getAvailableTicketsHandler,
   getTicketsByUserHandler,
   purchaseTicketsHandler,
+  reserveTicketsHandler,
 } from './tickets.controllers';
 import {
   createTicketsJSONSchema,
@@ -52,6 +53,30 @@ export async function ticketRoutes(app: FastifyInstance) {
 
     // Get user's tickets
     app.get('/my', getTicketsByUserHandler);
+
+    // Reserve tickets
+    app.post('/reserve', {
+      schema: {
+        body: {
+          type: 'object',
+          properties: {
+            eventId: { type: 'string' },
+            tickets: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  ticketTypeId: { type: 'string' },
+                  quantity: { type: 'number' },
+                },
+                required: ['ticketTypeId', 'quantity'],
+              },
+            },
+          },
+          required: ['eventId', 'tickets'],
+        },
+      },
+    }, reserveTicketsHandler);
 
     // Purchase tickets
     app.post('/purchase', {
