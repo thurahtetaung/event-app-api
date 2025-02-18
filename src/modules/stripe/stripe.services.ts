@@ -9,7 +9,6 @@ import { getPlatformConfigByKey } from '../platform-configurations/platform-conf
 import {
   handleSuccessfulPayment,
   handleFailedPayment,
-  handlePaymentIntentCreated,
 } from '../tickets/tickets.services';
 import {
   AppError,
@@ -214,7 +213,6 @@ export async function updateStripeAccountStatus(
   }
 }
 
-// In stripe.services.ts
 export async function createCheckoutSession({
   amount,
   currency,
@@ -222,6 +220,7 @@ export async function createCheckoutSession({
   metadata,
   successUrl,
   cancelUrl,
+  lineItems,
 }: {
   amount: number;
   currency: string;
@@ -229,6 +228,16 @@ export async function createCheckoutSession({
   metadata: Record<string, string>;
   successUrl: string;
   cancelUrl: string;
+  lineItems: Array<{
+    price_data: {
+      currency: string;
+      product_data: {
+        name: string;
+      };
+      unit_amount: number;
+    };
+    quantity: number;
+  }>;
 }) {
   try {
     const [organization] = await db
@@ -261,18 +270,7 @@ export async function createCheckoutSession({
     const session = await stripe.checkout.sessions.create({
       mode: 'payment',
       payment_method_types: ['card'],
-      line_items: [
-        {
-          price_data: {
-            currency,
-            product_data: {
-              name: 'Event Tickets',
-            },
-            unit_amount: amount,
-          },
-          quantity: 1,
-        },
-      ],
+      line_items: lineItems,
       success_url: successUrl,
       cancel_url: cancelUrl,
       payment_intent_data: {
@@ -413,22 +411,6 @@ export async function handleStripeWebhook(
             })
             .where(eq(orders.stripeCheckoutSessionId, session.id));
         }
-        break;
-      }
-
-      case 'payment_intent.created': {
-        const paymentIntent = event.data.object as Stripe.PaymentIntent;
-        logger.info(
-          `Processing payment intent created event for payment ${paymentIntent.id}`,
-        );
-        logger.info(
-          `Payment intent metadata: ${JSON.stringify(paymentIntent.metadata)}`,
-        );
-
-        await handlePaymentIntentCreated(
-          paymentIntent.id,
-          paymentIntent.metadata as any,
-        );
         break;
       }
 

@@ -811,26 +811,11 @@ export async function getEventAnalytics(eventId: string) {
         name: dbTicketTypes.name,
         type: dbTicketTypes.type,
         quantity: dbTicketTypes.quantity,
-        totalSold: sql<number>`COALESCE((
-          SELECT COUNT(*)
-          FROM ${tickets}
-          WHERE ${tickets.ticketTypeId} = ${dbTicketTypes.id}
-          AND ${tickets.status} = 'booked'
-        ), 0)`,
-        totalRevenue: sql<number>`COALESCE((
-          SELECT SUM(${tickets.price})
-          FROM ${tickets}
-          WHERE ${tickets.ticketTypeId} = ${dbTicketTypes.id}
-          AND ${tickets.status} = 'booked'
-        ), 0)`,
+        totalSold: sql<number>`CAST(COUNT(CASE WHEN ${tickets.status} = 'booked' THEN 1 END) AS integer)`,
+        totalRevenue: sql<number>`CAST(COALESCE(SUM(CASE WHEN ${tickets.status} = 'booked' THEN ${tickets.price} END), 0) AS integer)`,
         status: sql<'on-sale' | 'paused' | 'sold-out' | 'scheduled'>`
           CASE
-            WHEN ${dbTicketTypes.quantity} <= (
-              SELECT COUNT(*)
-              FROM ${tickets}
-              WHERE ${tickets.ticketTypeId} = ${dbTicketTypes.id}
-              AND ${tickets.status} = 'booked'
-            ) THEN 'sold-out'
+            WHEN CAST(COUNT(CASE WHEN ${tickets.status} = 'booked' THEN 1 END) AS integer) >= ${dbTicketTypes.quantity} THEN 'sold-out'
             WHEN ${dbTicketTypes.saleStart} > NOW() THEN 'scheduled'
             WHEN ${dbTicketTypes.saleEnd} < NOW() THEN 'paused'
             ELSE 'on-sale'
@@ -838,7 +823,32 @@ export async function getEventAnalytics(eventId: string) {
         `,
       })
       .from(dbTicketTypes)
-      .where(eq(dbTicketTypes.eventId, eventId));
+      .leftJoin(tickets, and(
+        eq(tickets.ticketTypeId, dbTicketTypes.id),
+        eq(tickets.eventId, eventId)
+      ))
+      .where(eq(dbTicketTypes.eventId, eventId))
+      .groupBy(dbTicketTypes.id);
+
+    // Log ticket type stats for debugging
+    logger.info(`Ticket type stats for event ${eventId}: ${JSON.stringify(ticketTypesList, null, 2)}`);
+
+    // Double check booked tickets directly
+    const bookedTickets = await db
+      .select({
+        ticketTypeId: tickets.ticketTypeId,
+        count: sql<number>`CAST(COUNT(*) AS integer)`,
+      })
+      .from(tickets)
+      .where(
+        and(
+          eq(tickets.eventId, eventId),
+          eq(tickets.status, 'booked')
+        )
+      )
+      .groupBy(tickets.ticketTypeId);
+
+    logger.info(`Booked tickets count for event ${eventId}: ${JSON.stringify(bookedTickets, null, 2)}`);
 
     // Get sales by day for the last 30 days
     const thirtyDaysAgo = new Date();
@@ -866,10 +876,12 @@ export async function getEventAnalytics(eventId: string) {
       totalRevenue: Number(totals.totalRevenue) / 100, // Convert from cents to dollars
       ticketTypeStats: ticketTypesList.map(stat => ({
         ...stat,
+        totalSold: Number(stat.totalSold),
         totalRevenue: Number(stat.totalRevenue) / 100, // Convert from cents to dollars
       })),
       salesByDay: salesByDay.map(day => ({
         ...day,
+        count: Number(day.count),
         revenue: Number(day.revenue) / 100, // Convert from cents to dollars
       })),
     };

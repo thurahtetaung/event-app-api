@@ -177,8 +177,11 @@ export const tickets = pgTable(
       .default('available')
       .$type<'available' | 'reserved' | 'booked'>(),
     userId: uuid('user_id').references(() => users.id),
+    accessToken: uuid('access_token'),
+    isValidated: boolean('is_validated').notNull().default(false),
     reservedAt: timestamp('reserved_at'),
     bookedAt: timestamp('booked_at'),
+    validatedAt: timestamp('validated_at'),
     createdAt: timestamp('created_at').defaultNow(),
     updatedAt: timestamp('updated_at').defaultNow(),
   },

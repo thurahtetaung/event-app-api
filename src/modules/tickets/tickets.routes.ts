@@ -6,11 +6,13 @@ import {
   getTicketsByUserHandler,
   purchaseTicketsHandler,
   reserveTicketsHandler,
+  getTicketAccessTokenHandler,
 } from './tickets.controllers';
 import {
   createTicketsJSONSchema,
   updateTicketStatusSchema,
   updateTicketStatusJSONSchema,
+  getTicketAccessTokenJSONSchema,
 } from './tickets.schema';
 import { authenticateRequest } from '../../middleware/auth';
 
@@ -90,9 +92,10 @@ export async function ticketRoutes(app: FastifyInstance) {
               items: {
                 type: 'object',
                 properties: {
-                  ticketId: { type: 'string' },
+                  ticketTypeId: { type: 'string' },
+                  quantity: { type: 'number' },
                 },
-                required: ['ticketId'],
+                required: ['ticketTypeId', 'quantity'],
               },
             },
           },
@@ -100,5 +103,10 @@ export async function ticketRoutes(app: FastifyInstance) {
         },
       },
     }, purchaseTicketsHandler);
+
+    // Get ticket access token
+    app.get('/events/:eventId/tickets/:ticketId/access-token', {
+      schema: getTicketAccessTokenJSONSchema,
+    }, getTicketAccessTokenHandler);
   });
 }

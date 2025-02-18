@@ -1,4 +1,4 @@
-import { eq, and, inArray, count, or } from 'drizzle-orm';
+import { eq, and, inArray, count, or, sql } from 'drizzle-orm';
 import { db } from '../../db';
 import {
   events,
@@ -29,7 +29,7 @@ import {
 
 interface PurchaseTicketsInput {
   eventId: string;
-  tickets: { ticketId: string }[];
+  tickets: Array<{ ticketTypeId: string; quantity: number }>;
 }
 
 interface ReserveTicketsInput {
@@ -155,16 +155,37 @@ export async function getTicketsByUser(userId: string) {
         ticket: tickets,
         event: events,
         ticketType: ticketTypes,
+        organization: organizations,
       })
       .from(tickets)
       .innerJoin(events, eq(tickets.eventId, events.id))
       .innerJoin(ticketTypes, eq(tickets.ticketTypeId, ticketTypes.id))
+      .leftJoin(organizations, eq(events.organizationId, organizations.id))
       .where(eq(tickets.userId, userId));
 
-    logger.info(`Found ${userTickets.length} tickets for user`);
-    return userTickets;
+    // Transform the result to match the expected format
+    const formattedTickets = userTickets.map(({ ticket, event, ticketType, organization }) => ({
+      ticket,
+      event: {
+        id: event.id,
+        title: event.title,
+        startTimestamp: event.startTimestamp,
+        endTimestamp: event.endTimestamp,
+        venue: event.venue,
+        address: event.address,
+        isOnline: event.isOnline,
+        coverImage: event.coverImage,
+        organization: organization ? {
+          name: organization.name
+        } : undefined
+      },
+      ticketType,
+    }));
+
+    logger.info(`Found ${formattedTickets.length} tickets for user`);
+    return formattedTickets;
   } catch (error) {
-    logger.error('Error getting user tickets:', error);
+    logger.error(`Error getting user tickets: ${error}`);
     throw new AppError(500, 'Failed to get user tickets');
   }
 }
@@ -191,48 +212,120 @@ export async function purchaseTickets(
         throw new Error('Event is not published');
       }
 
-      // Step 2: Check if any tickets are already reserved by someone else
-      for (const ticket of input.tickets) {
-        if (await isTicketReserved(ticket.ticketId, userId)) {
-          throw new Error('Some tickets are already reserved by another user');
+      // Step 2: Get available tickets for each ticket type and validate quantities
+      const selectedTickets = [];
+      const MAX_TICKETS_PER_ORDER = 10; // Global limit
+      let totalTicketsRequested = 0;
+
+      for (const ticketRequest of input.tickets) {
+        totalTicketsRequested += ticketRequest.quantity;
+        if (totalTicketsRequested > MAX_TICKETS_PER_ORDER) {
+          throw new Error(`Maximum ${MAX_TICKETS_PER_ORDER} tickets allowed per order`);
         }
+
+        const availableTickets = await tx
+          .select({
+            ticket: tickets,
+            ticketType: ticketTypes
+          })
+          .from(tickets)
+          .innerJoin(ticketTypes, eq(tickets.ticketTypeId, ticketTypes.id))
+          .where(
+            and(
+              eq(tickets.eventId, input.eventId),
+              eq(tickets.ticketTypeId, ticketRequest.ticketTypeId),
+              eq(tickets.status, 'available'),
+            ),
+          )
+          .limit(ticketRequest.quantity);
+
+        if (availableTickets.length < ticketRequest.quantity) {
+          throw new Error(`Not enough tickets available for type ${ticketRequest.ticketTypeId}`);
+        }
+
+        // Check if any tickets are already reserved by someone else
+        for (const { ticket } of availableTickets) {
+          if (await isTicketReserved(ticket.id, userId)) {
+            throw new Error('Some tickets are already reserved by another user');
+          }
+        }
+
+        selectedTickets.push(...availableTickets);
       }
 
-      // Step 3: Get and verify ticket availability
-      const selectedTickets = await tx
-        .select()
-        .from(tickets)
-        .where(
-          and(
-            eq(tickets.eventId, input.eventId),
-            inArray(
-              tickets.id,
-              input.tickets.map((t) => t.ticketId),
-            ),
-            eq(tickets.status, 'available'),
-          ),
+      // Check if all tickets are free
+      const allTicketsAreFree = selectedTickets.every(
+        ({ ticketType }) => ticketType.type === 'free'
+      );
+
+      if (allTicketsAreFree) {
+        // For free tickets, directly confirm the purchase
+        const [order] = await tx
+          .insert(orders)
+          .values({
+            userId,
+            eventId: event.id,
+            status: 'completed',
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          })
+          .returning();
+
+        // Create order items and update ticket status
+        await tx
+          .insert(orderItems)
+          .values(
+            selectedTickets.map(({ ticket }) => ({
+              orderId: order.id,
+              ticketId: ticket.id,
+              createdAt: new Date(),
+              updatedAt: new Date(),
+            })),
+          );
+
+        // Update ticket status to booked and generate access tokens
+        await Promise.all(
+          selectedTickets.map(async ({ ticket }) => {
+            await releaseTicket(ticket.id);
+            await tx
+              .update(tickets)
+              .set({
+                status: 'booked',
+                userId,
+                bookedAt: new Date(),
+                updatedAt: new Date(),
+                accessToken: sql`uuid_generate_v4()`,
+              })
+              .where(eq(tickets.id, ticket.id));
+          }),
         );
 
-      if (selectedTickets.length !== input.tickets.length) {
-        throw new Error('Some tickets are not available');
+        return {
+          success: true,
+          message: 'Free tickets confirmed successfully',
+          order,
+          isFree: true
+        };
       }
 
-      // Step 4: Reserve tickets in Redis
-      const reservationPromises = selectedTickets.map((ticket) =>
-        reserveTicket(ticket.id, userId),
-      );
-      const reservationResults = await Promise.all(reservationPromises);
+      // For paid tickets, proceed with Stripe checkout
+      // Step 4: Group tickets by type and calculate totals
+      const ticketsByType = selectedTickets.reduce((acc, { ticket, ticketType }) => {
+        const key = ticketType.id;
+        if (!acc[key]) {
+          acc[key] = {
+            name: ticketType.name,
+            unitPrice: Number(ticket.price),
+            quantity: 0,
+            tickets: []
+          };
+        }
+        acc[key].quantity += 1;
+        acc[key].tickets.push(ticket);
+        return acc;
+      }, {} as Record<string, { name: string; unitPrice: number; quantity: number; tickets: typeof tickets.$inferSelect[] }>);
 
-      if (reservationResults.some((result) => !result)) {
-        // If any reservation failed, release any successful reservations
-        await releaseUserTickets(userId);
-        throw new Error('Failed to reserve tickets');
-      }
-
-      // Step 5: Calculate total amount in cents
-      const totalAmount = selectedTickets.reduce((sum: number, ticket) => sum + ticket.price, 0);
-
-      // Step 7: Create pending order
+      // Step 5: Create pending order
       const [order] = await tx
         .insert(orders)
         .values({
@@ -243,35 +336,46 @@ export async function purchaseTickets(
           updatedAt: new Date(),
         })
         .returning();
-      logger.info(`Order created: ${JSON.stringify(order)}`);
 
-      // Step 8: Create order items
-      const orderItemsResult = await tx
+      // Step 6: Create order items
+      await tx
         .insert(orderItems)
         .values(
-          selectedTickets.map((ticket) => ({
+          selectedTickets.map(({ ticket }) => ({
             orderId: order.id,
             ticketId: ticket.id,
             createdAt: new Date(),
             updatedAt: new Date(),
           })),
-        )
-        .returning();
-      logger.info(`Order items created: ${JSON.stringify(orderItemsResult)}`);
+        );
 
-      // Step 6: Create Stripe Checkout session
+      // Step 7: Create Stripe Checkout session with proper line items and ticket IDs
       const session = await createCheckoutSession({
-        amount: totalAmount,
+        amount: selectedTickets.reduce((sum, { ticket }) => sum + Number(ticket.price), 0),
         currency: 'usd',
         organizationId: event.organizationId,
         metadata: {
           orderId: order.id,
           eventId: event.id,
           userId,
-          ticketIds: selectedTickets.map((t) => t.id).join(','),
+          ticketIds: JSON.stringify(selectedTickets.map(({ ticket }) => ticket.id))
         },
-        successUrl: `${env.API_URL}/checkout/success?session_id={CHECKOUT_SESSION_ID}`,
-        cancelUrl: `${env.API_URL}/checkout/cancel`,
+        successUrl: `${env.FRONTEND_URL}/checkout/success?session_id={CHECKOUT_SESSION_ID}`,
+        cancelUrl: `${env.FRONTEND_URL}/checkout/cancelled`,
+        lineItems: Object.values(ticketsByType).map(({ name, unitPrice, quantity }) => ({
+          price_data: {
+            currency: 'usd',
+            product_data: {
+              name: `${event.title} - ${name}`,
+              description: `Ticket price: $${(unitPrice / 100).toFixed(2)}`,
+            },
+            unit_amount: unitPrice,
+          },
+          quantity: quantity,
+          adjustable_quantity: {
+            enabled: false
+          }
+        })),
       });
 
       // Update order with checkout session ID
@@ -283,12 +387,12 @@ export async function purchaseTickets(
         })
         .where(eq(orders.id, order.id));
 
-      logger.info(`Stripe session: ${JSON.stringify(session)}`);
-
       // Return both the order details and the checkout URL
       return {
+        success: true,
         order,
         checkoutUrl: session.url,
+        isFree: false
       };
     });
   } catch (error) {
@@ -299,86 +403,82 @@ export async function purchaseTickets(
   }
 }
 
-export async function handlePaymentIntentCreated(
-  payment_intent_id: string,
-  metadata: {
-    orderId: string;
-    eventId: string;
-    userId: string;
-    ticketIds: string[];
-  },
-) {
-  try {
-    // Update the order with payment intent id
-    const [order] = await db
-      .update(orders)
-      .set({
-        stripePaymentIntentId: payment_intent_id,
-        updatedAt: new Date(),
-      })
-      .where(eq(orders.id, metadata.orderId))
-      .returning();
-    logger.info(`Order updated with payment intent id: ${payment_intent_id}`);
-    return order;
-  } catch (error) {
-    logger.error(`Error handling payment intent created: ${error}`);
-    throw error;
-  }
-}
-
 export async function handleSuccessfulPayment(
   paymentIntentId: string,
   metadata: {
     orderId: string;
     eventId: string;
     userId: string;
-    ticketIds: string[];
+    ticketIds: string;
   },
 ) {
   try {
     logger.info(`Handling successful payment for payment ${paymentIntentId}`);
-    // Update order status
-    const [order] = await db
-      .update(orders)
-      .set({
-        status: 'completed',
-        updatedAt: new Date(),
-      })
-      .where(
-        or(
-          eq(orders.stripePaymentIntentId, paymentIntentId),
-          eq(orders.id, metadata.orderId),
-        ),
-      )
-      .returning();
 
-    if (order) {
-      logger.info(
-        `Order updated with status completed: ${JSON.stringify(order)}`,
-      );
-      // Get order items
-      const orderItemsList = await db
+    // Parse ticket IDs from metadata
+    const ticketIds = JSON.parse(metadata.ticketIds) as string[];
+
+    return await db.transaction(async (tx) => {
+      // Update order status
+      const [order] = await tx
+        .update(orders)
+        .set({
+          status: 'completed',
+          updatedAt: new Date(),
+        })
+        .where(
+          or(
+            eq(orders.stripePaymentIntentId, paymentIntentId),
+            eq(orders.id, metadata.orderId),
+          ),
+        )
+        .returning();
+
+      if (!order) {
+        throw new Error('Order not found');
+      }
+
+      // Get the tickets that were reserved during checkout
+      const selectedTickets = await tx
         .select()
-        .from(orderItems)
-        .where(eq(orderItems.orderId, order.id));
+        .from(tickets)
+        .where(inArray(tickets.id, ticketIds));
 
-      // Update ticket status to booked and release Redis reservations
+      if (selectedTickets.length !== ticketIds.length) {
+        throw new Error('Some selected tickets are no longer available');
+      }
+
+      // Create order items for the specific tickets
+      await tx
+        .insert(orderItems)
+        .values(
+          selectedTickets.map((ticket) => ({
+            orderId: order.id,
+            ticketId: ticket.id,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          })),
+        );
+
+      // Update ticket status to booked and generate access tokens
       await Promise.all(
-        orderItemsList.map(async (item) => {
-          await releaseTicket(item.ticketId);
-          await db
+        selectedTickets.map(async (ticket) => {
+          await releaseTicket(ticket.id);
+          await tx
             .update(tickets)
             .set({
               status: 'booked',
               userId: metadata.userId,
+              bookedAt: new Date(),
               updatedAt: new Date(),
+              accessToken: sql`uuid_generate_v4()`,
             })
-            .where(eq(tickets.id, item.ticketId));
+            .where(eq(tickets.id, ticket.id));
         }),
       );
-    }
 
-    return order;
+      return order;
+    });
   } catch (error) {
     logger.error(`Error handling successful payment: ${error}`);
     throw error;
@@ -436,69 +536,64 @@ export async function reserveTickets(
 ) {
   try {
     return await db.transaction(async (tx) => {
-      logger.info(`Attempting to reserve tickets for event ${input.eventId}, user ${userId}`);
+      // Get available tickets with ticket type details
+      const availableTickets = await tx
+        .select({
+          ticket: tickets,
+          ticketType: ticketTypes
+        })
+        .from(tickets)
+        .innerJoin(
+          ticketTypes,
+          eq(tickets.ticketTypeId, ticketTypes.id)
+        )
+        .where(
+          and(
+            inArray(tickets.ticketTypeId, input.tickets.map(t => t.ticketTypeId)),
+            eq(tickets.status, 'available'),
+          ),
+        )
+        .orderBy(tickets.id);
 
-      // Step 1: Verify the event exists and is published
-      const [event] = await tx
-        .select()
-        .from(events)
-        .where(eq(events.id, input.eventId))
-        .limit(1);
+      // Check which tickets are not already reserved in Redis
+      const ticketReservationChecks = await Promise.all(
+        availableTickets.map(async ({ ticket }) => ({
+          ticket,
+          isReserved: await isTicketReserved(ticket.id)
+        }))
+      );
 
-      if (!event) {
-        throw new Error('Event not found');
-      }
+      const trulyAvailableTickets = availableTickets.filter((_, index) =>
+        !ticketReservationChecks[index].isReserved
+      );
 
-      if (event.status !== 'published') {
-        throw new Error('Event is not published');
-      }
+      // Group tickets by ticket type using a Map
+      const ticketsByType = new Map();
+      trulyAvailableTickets.forEach((ticket: { ticket: typeof tickets.$inferSelect; ticketType: typeof ticketTypes.$inferSelect }) => {
+        const typeId = ticket.ticketType.id;
+        if (!ticketsByType.has(typeId)) {
+          ticketsByType.set(typeId, []);
+        }
+        ticketsByType.get(typeId).push(ticket);
+      });
 
       const reservedTickets: ReservedTicket[] = [];
 
       // Process each ticket request
       for (const ticketRequest of input.tickets) {
-        // Get available tickets with ticket type details
-        const availableTickets = await tx
-          .select({
-            ticket: tickets,
-            ticketType: ticketTypes
-          })
-          .from(tickets)
-          .innerJoin(
-            ticketTypes,
-            eq(tickets.ticketTypeId, ticketTypes.id)
-          )
-          .where(
-            and(
-              eq(tickets.ticketTypeId, ticketRequest.ticketTypeId),
-              eq(tickets.status, 'available'),
-            ),
-          )
-          .orderBy(tickets.id);
+        const availableForType = ticketsByType.get(ticketRequest.ticketTypeId) || [];
 
-        // Check which tickets are not already reserved in Redis
-        const ticketReservationChecks = await Promise.all(
-          availableTickets.map(async ({ ticket }) => ({
-            ticket,
-            isReserved: await isTicketReserved(ticket.id)
-          }))
-        );
-
-        const trulyAvailableTickets = availableTickets.filter((_, index) =>
-          !ticketReservationChecks[index].isReserved
-        );
-
-        if (trulyAvailableTickets.length < ticketRequest.quantity) {
+        if (availableForType.length < ticketRequest.quantity) {
           await releaseUserTickets(userId);
-          throw new Error(`Not enough tickets available. Requested: ${ticketRequest.quantity}, Available: ${trulyAvailableTickets.length}`);
+          throw new Error(`Not enough tickets available for type ${ticketRequest.ticketTypeId}. Requested: ${ticketRequest.quantity}, Available: ${availableForType.length}`);
         }
 
         // Take only the number of tickets we need
-        const ticketsToReserve = trulyAvailableTickets.slice(0, ticketRequest.quantity);
+        const ticketsToReserve = availableForType.slice(0, ticketRequest.quantity);
 
         // Reserve all tickets at once
         const reservationResults = await Promise.all(
-          ticketsToReserve.map(({ ticket }) => reserveTicket(ticket.id, userId))
+          ticketsToReserve.map(({ ticket }: { ticket: typeof tickets.$inferSelect }) => reserveTicket(ticket.id, userId))
         );
 
         if (reservationResults.some(result => !result)) {
@@ -526,5 +621,62 @@ export async function reserveTickets(
   } catch (error) {
     logger.error('Error reserving tickets:', error);
     throw error;
+  }
+}
+
+export async function getTicketAccessToken(
+  userId: string,
+  eventId: string,
+  ticketId: string,
+) {
+  try {
+    logger.info(`Getting access token for ticket ${ticketId} of event ${eventId}`);
+
+    // Get the ticket with its access token
+    const [ticket] = await db
+      .select({
+        id: tickets.id,
+        status: tickets.status,
+        userId: tickets.userId,
+        accessToken: tickets.accessToken,
+        event: {
+          id: events.id,
+          organizationId: events.organizationId,
+        },
+      })
+      .from(tickets)
+      .innerJoin(events, eq(tickets.eventId, events.id))
+      .where(
+        and(
+          eq(tickets.id, ticketId),
+          eq(tickets.eventId, eventId),
+          eq(tickets.status, 'booked'),
+        ),
+      )
+      .limit(1);
+
+    if (!ticket) {
+      throw new NotFoundError('Ticket not found');
+    }
+
+    // Check if the user owns the ticket
+    if (ticket.userId !== userId) {
+      throw new ForbiddenError('You do not have access to this ticket');
+    }
+
+    // Check if the ticket has an access token
+    if (!ticket.accessToken) {
+      throw new ValidationError('Ticket access token not available');
+    }
+
+    return {
+      accessToken: ticket.accessToken
+    };
+  } catch (error) {
+    logger.error(`Error getting ticket access token: ${error}`);
+    if (error instanceof NotFoundError || error instanceof ForbiddenError || error instanceof ValidationError) {
+      throw error;
+    }
+    throw new AppError(500, 'Failed to get ticket access token');
   }
 }

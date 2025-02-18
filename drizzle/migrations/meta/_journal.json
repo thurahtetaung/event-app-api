@@ -8,6 +8,13 @@
       "when": 1739707722074,
       "tag": "0000_tired_alice",
       "breakpoints": false
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1739896721899,
+      "tag": "0001_jittery_shadowcat",
+      "breakpoints": false
     }
   ]
 }

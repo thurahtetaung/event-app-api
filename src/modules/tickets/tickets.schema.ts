@@ -40,3 +40,31 @@ export const updateTicketStatusJSONSchema = {
 };
 
 export type UpdateTicketStatusInput = z.infer<typeof updateTicketStatusSchema>;
+
+// Ticket validation schema
+export const validateTicketSchema = z.object({
+  params: z.object({
+    eventId: z.string().min(1, "Event ID is required"),
+    accessToken: z.string().uuid("Invalid access token format"),
+  }),
+});
+
+export type ValidateTicketParams = z.infer<typeof validateTicketSchema>['params'];
+
+export const validateTicketJSONSchema = {
+  params: zodToJsonSchema(validateTicketSchema.shape.params, 'validateTicketSchema'),
+};
+
+// Get ticket access token schema
+export const getTicketAccessTokenSchema = z.object({
+  params: z.object({
+    eventId: z.string().min(1, "Event ID is required"),
+    ticketId: z.string().min(1, "Ticket ID is required"),
+  }),
+});
+
+export type GetTicketAccessTokenParams = z.infer<typeof getTicketAccessTokenSchema>['params'];
+
+export const getTicketAccessTokenJSONSchema = {
+  params: zodToJsonSchema(getTicketAccessTokenSchema.shape.params, 'getTicketAccessTokenSchema'),
+};
