@@ -12,41 +12,29 @@ import {
   getEventAnalyticsHandler,
 } from './events.controllers';
 import { authenticateRequest } from '../../middleware/auth';
-import { createEventSchema, createTicketTypeSchema, createTicketTypeJSONSchema } from './events.schema';
-
-const EVENT_CATEGORIES = [
-  'Conference',
-  'Workshop',
-  'Concert',
-  'Exhibition',
-  'Sports',
-  'Networking',
-  'Other',
-];
+import {
+  createEventJSONSchema,
+  updateEventJSONSchema,
+  createTicketTypeJSONSchema,
+  eventQueryJSONSchema,
+  eventIdParamJSONSchema,
+  eventIdTicketTypeIdParamJSONSchema,
+  updateEventStatusJSONSchema,
+  eventParamSchema,
+} from './events.schema';
 
 export async function eventRoutes(app: FastifyInstance) {
   // Get all events (public)
-  app.get('/', {
-    schema: {
-      querystring: {
-        type: 'object',
-        properties: {
-          category: { type: 'string' },
-          query: { type: 'string' },
-          sort: { type: 'string', enum: ['date', 'price-low', 'price-high'] },
-          date: { type: 'string' },
-          priceRange: { type: 'string', enum: ['all', 'free', 'paid'] },
-          minPrice: { type: 'string' },
-          maxPrice: { type: 'string' },
-          isOnline: { type: 'string', enum: ['true', 'false'] },
-          isInPerson: { type: 'string', enum: ['true', 'false'] }
-        }
-      }
-    }
-  }, getEventsHandler);
+  app.get(
+    '/',
+    {
+      schema: eventQueryJSONSchema,
+    },
+    getEventsHandler,
+  );
 
   // Get single event (public)
-  app.get('/:id', getEventHandler);
+  app.get('/:id', { schema: eventIdParamJSONSchema }, getEventHandler);
 
   // Protected routes
   app.register(async function (app) {
@@ -56,162 +44,75 @@ export async function eventRoutes(app: FastifyInstance) {
     app.get('/my', getOrganizerEventsHandler);
 
     // Create event
-    app.post('/', {
-      schema: {
-        body: {
-          type: 'object',
-          required: ['title', 'startTimestamp', 'endTimestamp', 'category', 'capacity'],
-          properties: {
-            title: { type: 'string', minLength: 1 },
-            description: { type: 'string' },
-            startTimestamp: { type: 'string' },
-            endTimestamp: { type: 'string' },
-            venue: { type: 'string', nullable: true },
-            address: { type: 'string', nullable: true },
-            category: { type: 'string', enum: EVENT_CATEGORIES },
-            isOnline: { type: 'boolean', default: false },
-            capacity: { type: 'number', minimum: 1 },
-            coverImage: { type: 'string' },
-            status: { type: 'string', enum: ['draft', 'published', 'cancelled'], default: 'draft' }
-          },
-          allOf: [
-            {
-              if: {
-                properties: { isOnline: { const: false } },
-                required: ['isOnline']
-              },
-              then: {
-                required: ['venue', 'address'],
-                properties: {
-                  venue: { type: 'string', minLength: 1 },
-                  address: { type: 'string', minLength: 1 }
-                }
-              }
-            }
-          ]
-        }
-      }
-    }, createEventHandler);
+    app.post(
+      '/',
+      {
+        schema: createEventJSONSchema,
+      },
+      createEventHandler,
+    );
 
     // Update event
-    app.patch('/:id', {
-      schema: {
-        params: {
-          type: 'object',
-          required: ['id'],
-          properties: {
-            id: { type: 'string' },
-          },
+    app.patch(
+      '/:id',
+      {
+        schema: {
+          ...eventIdParamJSONSchema,
+          ...updateEventJSONSchema,
         },
-        body: {
-          type: 'object',
-          properties: {
-            title: { type: 'string', minLength: 1 },
-            description: { type: 'string' },
-            startTimestamp: { type: 'string' },
-            endTimestamp: { type: 'string' },
-            venue: { type: 'string', nullable: true },
-            address: { type: 'string', nullable: true },
-            category: { type: 'string', enum: EVENT_CATEGORIES },
-            isOnline: { type: 'boolean' },
-            capacity: { type: 'number', minimum: 1 },
-            coverImage: { type: 'string' },
-            status: { type: 'string', enum: ['draft', 'published', 'cancelled'] }
-          },
-          allOf: [
-            {
-              if: {
-                properties: { isOnline: { const: false } },
-                required: ['isOnline']
-              },
-              then: {
-                properties: {
-                  venue: { type: 'string', minLength: 1 },
-                  address: { type: 'string', minLength: 1 }
-                }
-              }
-            }
-          ]
-        }
       },
-    }, updateEventHandler);
+      updateEventHandler,
+    );
 
     // Delete event
-    app.delete('/:id', {
-      schema: {
-        params: {
-          type: 'object',
-          required: ['id'],
-          properties: {
-            id: { type: 'string' },
-          },
-        },
+    app.delete(
+      '/:id',
+      {
+        schema: eventIdParamJSONSchema,
       },
-    }, deleteEventHandler);
+      deleteEventHandler,
+    );
 
     // Update event status
-    app.patch('/:id/status', {
-      schema: {
-        params: {
-          type: 'object',
-          required: ['id'],
-          properties: {
-            id: { type: 'string' },
-          },
-        },
-        body: {
-          type: 'object',
-          required: ['status'],
-          properties: {
-            status: {
-              type: 'string',
-              enum: ['draft', 'published', 'cancelled'],
-            },
-          },
-        },
+    app.patch(
+      '/:id/status',
+      {
+        schema: updateEventStatusJSONSchema,
       },
-    }, updateEventPublishStatusHandler);
+      updateEventPublishStatusHandler,
+    );
 
     // Get event analytics
-    app.get('/:id/analytics', {
-      schema: {
-        params: {
-          type: 'object',
-          required: ['id'],
-          properties: {
-            id: { type: 'string' },
-          },
-        },
+    app.get(
+      '/:id/analytics',
+      {
+        schema: eventIdParamJSONSchema,
       },
-    }, getEventAnalyticsHandler);
+      getEventAnalyticsHandler,
+    );
 
     // Create ticket type
-    app.post('/:eventId/ticket-types', {
-      schema: {
-        params: {
-          type: 'object',
-          required: ['eventId'],
-          properties: {
-            eventId: { type: 'string' },
-          },
+    app.post(
+      '/:eventId/ticket-types',
+      {
+        schema: {
+          ...eventParamSchema,
+          ...createTicketTypeJSONSchema,
         },
-        ...createTicketTypeJSONSchema
       },
-    }, createTicketTypeHandler);
+      createTicketTypeHandler,
+    );
 
     // Update ticket type
-    app.patch('/:eventId/ticket-types/:ticketTypeId', {
-      schema: {
-        params: {
-          type: 'object',
-          required: ['eventId', 'ticketTypeId'],
-          properties: {
-            eventId: { type: 'string' },
-            ticketTypeId: { type: 'string' },
-          },
+    app.patch(
+      '/:eventId/ticket-types/:ticketTypeId',
+      {
+        schema: {
+          ...eventIdTicketTypeIdParamJSONSchema,
+          ...createTicketTypeJSONSchema,
         },
-        ...createTicketTypeJSONSchema
       },
-    }, updateTicketTypeHandler);
+      updateTicketTypeHandler,
+    );
   });
 }

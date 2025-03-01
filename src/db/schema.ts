@@ -58,6 +58,7 @@ export const users = pgTable(
 export const categories = pgTable('categories', {
   id: uuid().primaryKey().defaultRandom(),
   name: text().notNull(),
+  icon: text().default('Globe'), // Default to a generic icon
   createdAt: timestamp().defaultNow(),
   updatedAt: timestamp().defaultNow(),
 });
@@ -78,7 +79,10 @@ export const events = pgTable(
     endTimestamp: timestamp().notNull(),
     venue: text(),
     address: text(),
-    category: text().notNull(),
+    categoryId: uuid()
+      .notNull()
+      .references(() => categories.id),
+    category: text(),
     isOnline: boolean().default(false),
     capacity: integer().notNull(),
     coverImage: text(),
@@ -92,6 +96,7 @@ export const events = pgTable(
   (events) => [
     index().on(events.organizationId),
     index().on(events.status),
+    index().on(events.categoryId),
   ],
 );
 
@@ -125,10 +130,7 @@ export const organizations = pgTable(
   ],
 );
 
-export const ticketTypeEnum = pgEnum('ticket_type', [
-  'paid',
-  'free',
-]);
+export const ticketTypeEnum = pgEnum('ticket_type', ['paid', 'free']);
 
 export const ticketTypes = pgTable(
   'ticket_types',
@@ -149,9 +151,7 @@ export const ticketTypes = pgTable(
     createdAt: timestamp().defaultNow(),
     updatedAt: timestamp().defaultNow(),
   },
-  (ticketTypes) => [
-    index().on(ticketTypes.eventId),
-  ],
+  (ticketTypes) => [index().on(ticketTypes.eventId)],
 );
 
 export const ticketStatusEnum = pgEnum('ticket_status', [

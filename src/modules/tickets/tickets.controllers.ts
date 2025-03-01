@@ -1,5 +1,9 @@
 import { FastifyReply, FastifyRequest } from 'fastify';
-import { CreateTicketsSchema, UpdateTicketStatusInput, GetTicketAccessTokenParams } from './tickets.schema';
+import {
+  CreateTicketsSchema,
+  UpdateTicketStatusInput,
+  GetTicketAccessTokenParams,
+} from './tickets.schema';
 import {
   createTicketsForTicketType,
   updateTicketStatus,
@@ -10,7 +14,12 @@ import {
   getTicketAccessToken,
 } from './tickets.services';
 import { logger } from '../../utils/logger';
-import { NotFoundError, ForbiddenError, ValidationError } from '../../utils/errors';
+import {
+  NotFoundError,
+  ForbiddenError,
+  ValidationError,
+} from '../../utils/errors';
+import { releaseUserTickets } from '../../utils/redis';
 
 export async function createTicketsHandler(
   request: FastifyRequest<{
@@ -97,6 +106,7 @@ export async function purchaseTicketsHandler(
     Body: {
       eventId: string;
       tickets: Array<{ ticketTypeId: string; quantity: number }>;
+      specificTicketIds?: string[];
     };
   }>,
   reply: FastifyReply,
@@ -159,5 +169,38 @@ export async function getTicketAccessTokenHandler(
       return reply.code(400).send({ message: error.message });
     }
     return reply.code(500).send({ message: 'Internal server error' });
+  }
+}
+
+export async function releaseReservationsHandler(
+  request: FastifyRequest,
+  reply: FastifyReply,
+) {
+  try {
+    // Extract user ID from request (will be available even with empty body)
+    const userId = request.user?.id;
+
+    if (!userId) {
+      return reply.code(401).send({
+        success: false,
+        message: 'User not authenticated',
+      });
+    }
+
+    logger.info(`Releasing all reserved tickets for user ${userId}`);
+    await releaseUserTickets(userId);
+
+    return reply.code(200).send({
+      success: true,
+      message: 'All ticket reservations released successfully',
+    });
+  } catch (error) {
+    logger.error(`Error releasing ticket reservations: ${error}`);
+    if (error instanceof Error) {
+      return reply.code(400).send({ message: error.message });
+    }
+    return reply
+      .code(500)
+      .send({ message: 'Failed to release ticket reservations' });
   }
 }

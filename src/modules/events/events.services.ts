@@ -1,6 +1,13 @@
 import { eq, InferInsertModel } from 'drizzle-orm';
 import { db } from '../../db';
-import { events, ticketTypes as dbTicketTypes, users, organizations, tickets } from '../../db/schema';
+import {
+  events,
+  ticketTypes as dbTicketTypes,
+  users,
+  organizations,
+  tickets,
+  categories,
+} from '../../db/schema';
 import { logger } from '../../utils/logger';
 import { count, desc } from 'drizzle-orm';
 import {
@@ -53,10 +60,7 @@ export async function checkEventOwner(
       organization: organizations,
     })
     .from(events)
-    .innerJoin(
-      organizations,
-      eq(events.organizationId, organizations.id),
-    )
+    .innerJoin(organizations, eq(events.organizationId, organizations.id))
     .where(eq(events.id, eventId))
     .limit(1);
 
@@ -85,11 +89,27 @@ export async function createEvent(data: EventSchema) {
     logger.debug(`Event data: ${JSON.stringify(data)}`);
 
     // Validate the data
-    if (!data.title || !data.category || !data.organizationId) {
+    if (!data.title || !data.categoryId || !data.organizationId) {
       throw new ValidationError('Missing required fields');
     }
 
-    // Ensure category is treated as text
+    // Fetch the category to ensure it exists
+    if (data.categoryId) {
+      const [category] = await db
+        .select()
+        .from(categories)
+        .where(eq(categories.id, data.categoryId))
+        .limit(1);
+
+      if (!category) {
+        throw new ValidationError('Invalid category ID');
+      }
+
+      // Category name should only be stored for logging purposes
+      logger.debug(`Using category: ${category.name} (${data.categoryId})`);
+    }
+
+    // Prepare event data
     const eventData = {
       title: data.title,
       description: data.description,
@@ -97,7 +117,7 @@ export async function createEvent(data: EventSchema) {
       endTimestamp: new Date(data.endTimestamp),
       venue: data.venue,
       address: data.address,
-      category: data.category,
+      categoryId: data.categoryId,
       isOnline: data.isOnline,
       capacity: data.capacity,
       coverImage: data.coverImage,
@@ -107,9 +127,7 @@ export async function createEvent(data: EventSchema) {
 
     logger.debug(`Inserting event with data: ${JSON.stringify(eventData)}`);
 
-    const [event] = await db.insert(events)
-      .values(eventData)
-      .returning();
+    const [event] = await db.insert(events).values(eventData).returning();
 
     logger.info(`Event created successfully with ID ${event.id}`);
     return event;
@@ -135,7 +153,7 @@ async function validateEventCapacity(eventId: string, newCapacity?: number) {
 
   if (newCapacity !== undefined && totalTickets > newCapacity) {
     throw new ValidationError(
-      `Cannot reduce event capacity to ${newCapacity}. There are already ${totalTickets} tickets created.`
+      `Cannot reduce event capacity to ${newCapacity}. There are already ${totalTickets} tickets created.`,
     );
   }
 
@@ -167,7 +185,7 @@ async function validateTicketTypeCreation(eventId: string, quantity: number) {
   if (newTotal > event.capacity) {
     throw new ValidationError(
       `Cannot create ${quantity} tickets. This would exceed the event capacity of ${event.capacity}. ` +
-      `Current total tickets: ${totalTickets}. Maximum additional tickets allowed: ${event.capacity - totalTickets}`
+        `Current total tickets: ${totalTickets}. Maximum additional tickets allowed: ${event.capacity - totalTickets}`,
     );
   }
 }
@@ -186,13 +204,20 @@ export async function createTicketType(data: TicketTypeSchema) {
     }
 
     // Validate min/max per order
-    if (data.minPerOrder && data.maxPerOrder &&
-        Number(data.minPerOrder) > Number(data.maxPerOrder)) {
-      throw new ValidationError('Minimum per order cannot be greater than maximum per order');
+    if (
+      data.minPerOrder &&
+      data.maxPerOrder &&
+      Number(data.minPerOrder) > Number(data.maxPerOrder)
+    ) {
+      throw new ValidationError(
+        'Minimum per order cannot be greater than maximum per order',
+      );
     }
 
     if (data.maxPerOrder && Number(data.maxPerOrder) > data.quantity) {
-      throw new ValidationError('Maximum per order cannot exceed total quantity');
+      throw new ValidationError(
+        'Maximum per order cannot exceed total quantity',
+      );
     }
 
     // Convert price to cents for storage
@@ -220,7 +245,11 @@ export async function createTicketType(data: TicketTypeSchema) {
   } catch (error) {
     logger.error(`Error creating ticket type: ${error}`);
     // Let validation, not found, and forbidden errors propagate as is
-    if (error.name === 'ValidationError' || error.name === 'NotFoundError' || error.name === 'ForbiddenError') {
+    if (
+      error.name === 'ValidationError' ||
+      error.name === 'NotFoundError' ||
+      error.name === 'ForbiddenError'
+    ) {
       throw error;
     }
     // For unknown errors, wrap in AppError
@@ -243,12 +272,17 @@ export async function getEvents(params?: {
     // Safe parameter logging
     const safeParams = {
       ...params,
-      isOnline: params?.isOnline === 'true' || params?.isOnline === true || false,
-      isInPerson: params?.isInPerson === 'true' || params?.isInPerson === true || false
+      isOnline:
+        params?.isOnline === 'true' || params?.isOnline === true || false,
+      isInPerson:
+        params?.isInPerson === 'true' || params?.isInPerson === true || false,
     };
 
-    logger.info('Fetching events with params:',
-      Object.fromEntries(Object.entries(safeParams).filter(([_, v]) => v !== undefined))
+    logger.info(
+      'Fetching events with params:',
+      Object.fromEntries(
+        Object.entries(safeParams).filter(([_, v]) => v !== undefined),
+      ),
     );
 
     // Build the where conditions
@@ -256,8 +290,35 @@ export async function getEvents(params?: {
 
     // Category filter
     if (params?.category && params.category !== 'All Categories') {
-      conditions.push(eq(events.category, params.category));
-      logger.debug('Added category filter:', params.category);
+      // First try exact match on category name
+      const [categoryByName] = await db
+        .select()
+        .from(categories)
+        .where(eq(categories.name, params.category))
+        .limit(1);
+
+      if (categoryByName) {
+        // If found by exact name, filter by categoryId
+        conditions.push(eq(events.categoryId, categoryByName.id));
+        logger.debug(
+          'Added category filter by ID (exact match):',
+          categoryByName.id,
+        );
+      } else {
+        // Try partial match on category name
+        const searchTerm = `%${params.category.toLowerCase()}%`;
+        conditions.push(
+          sql`EXISTS (
+            SELECT 1 FROM ${categories}
+            WHERE ${categories.id} = ${events.categoryId}
+            AND LOWER(${categories.name}) LIKE ${searchTerm}
+          )`,
+        );
+        logger.debug(
+          'Added category filter by partial name match:',
+          params.category,
+        );
+      }
     }
 
     // Search query filter
@@ -269,8 +330,12 @@ export async function getEvents(params?: {
           LOWER(${events.description}) LIKE ${searchTerm} OR
           LOWER(${events.venue}) LIKE ${searchTerm} OR
           LOWER(${events.address}) LIKE ${searchTerm} OR
-          LOWER(${events.category}) LIKE ${searchTerm}
-        )`
+          EXISTS (
+            SELECT 1 FROM ${categories}
+            WHERE ${categories.id} = ${events.categoryId}
+            AND LOWER(${categories.name}) LIKE ${searchTerm}
+          )
+        )`,
       );
       logger.debug('Added search filter:', params.query);
     }
@@ -335,6 +400,7 @@ export async function getEvents(params?: {
       .select({
         event: events,
         organization: organizations,
+        category: categories,
         lowestPrice: sql<number>`COALESCE(
           (
             SELECT MIN(${dbTicketTypes.price})
@@ -346,6 +412,7 @@ export async function getEvents(params?: {
       })
       .from(events)
       .leftJoin(organizations, eq(events.organizationId, organizations.id))
+      .leftJoin(categories, eq(events.categoryId, categories.id))
       .where(and(...conditions));
 
     // Add ordering based on sort parameter
@@ -359,7 +426,7 @@ export async function getEvents(params?: {
           0
         ) ASC`)
       : params?.sort === 'price-high'
-      ? baseQuery.orderBy(sql`COALESCE(
+        ? baseQuery.orderBy(sql`COALESCE(
           (
             SELECT MIN(${dbTicketTypes.price})
             FROM ${dbTicketTypes}
@@ -367,11 +434,11 @@ export async function getEvents(params?: {
           ),
           0
         ) DESC`)
-      : baseQuery.orderBy(desc(events.startTimestamp)));
+        : baseQuery.orderBy(desc(events.startTimestamp)));
 
     // Transform result to include ticket types
     const eventsWithTickets = await Promise.all(
-      result.map(async ({ event, organization, lowestPrice }) => {
+      result.map(async ({ event, organization, category, lowestPrice }) => {
         const eventTickets = await db
           .select()
           .from(dbTicketTypes)
@@ -379,15 +446,24 @@ export async function getEvents(params?: {
 
         return {
           ...event,
-          organization: organization ? {
-            name: organization.name,
-          } : undefined,
-          ticketTypes: eventTickets.map(tt => ({
+          organization: organization
+            ? {
+                name: organization.name,
+              }
+            : undefined,
+          categoryObject: category
+            ? {
+                id: category.id,
+                name: category.name,
+                icon: category.icon,
+              }
+            : undefined,
+          ticketTypes: eventTickets.map((tt) => ({
             ...tt,
             price: Number(tt.price) / 100, // Convert cents to dollars
           })),
         };
-      })
+      }),
     );
 
     logger.debug(`Successfully fetched ${eventsWithTickets.length} events`);
@@ -405,12 +481,11 @@ export async function getEventById(id: string) {
       .select({
         event: events,
         organization: organizations,
+        category: categories,
       })
       .from(events)
-      .leftJoin(
-        organizations,
-        eq(events.organizationId, organizations.id),
-      )
+      .leftJoin(organizations, eq(events.organizationId, organizations.id))
+      .leftJoin(categories, eq(events.categoryId, categories.id))
       .where(eq(events.id, id))
       .limit(1);
 
@@ -434,12 +509,6 @@ export async function getEventById(id: string) {
         eventId: dbTicketTypes.eventId,
         createdAt: dbTicketTypes.createdAt,
         updatedAt: dbTicketTypes.updatedAt,
-        soldCount: sql<number>`COALESCE((
-          SELECT COUNT(*)
-          FROM ${tickets}
-          WHERE ${tickets.ticketTypeId} = ${dbTicketTypes.id}
-          AND ${tickets.status} = 'booked'
-        ), 0)`,
         status: sql<'on-sale' | 'paused' | 'sold-out' | 'scheduled'>`
           CASE
             WHEN ${dbTicketTypes.quantity} <= (
@@ -452,31 +521,96 @@ export async function getEventById(id: string) {
             WHEN ${dbTicketTypes.saleEnd} < NOW() THEN 'paused'
             ELSE 'on-sale'
           END
-        `
+        `,
       })
       .from(dbTicketTypes)
       .where(eq(dbTicketTypes.eventId, id));
 
-    // Get Redis reservation counts for each ticket type
-    const ticketTypesWithReservations = await Promise.all(
+    // Debug log ticket types
+    logger.info(
+      `Event ${id} ticket types fetched: ${JSON.stringify(
+        ticketTypesList.map((t) => ({ id: t.id, name: t.name })),
+        null,
+        2,
+      )}`,
+    );
+
+    // Get sold count for each ticket type
+    const ticketTypesWithSoldCount = await Promise.all(
       ticketTypesList.map(async (ticketType) => {
-        const reservedCount = await getReservedTicketCount(ticketType.id);
+        const [bookedTicketsResult] = await db
+          .select({
+            count: count(),
+          })
+          .from(tickets)
+          .where(
+            and(
+              eq(tickets.ticketTypeId, ticketType.id),
+              eq(tickets.status, 'booked'),
+            ),
+          );
+
+        const soldCount = Number(bookedTicketsResult.count);
+        logger.info(
+          `Ticket type ${ticketType.id} (${ticketType.name}) has ${soldCount} booked tickets`,
+        );
+
+        // Recalculate status based on actual sold count
+        const status =
+          soldCount >= ticketType.quantity
+            ? 'sold-out'
+            : new Date(ticketType.saleStart) > new Date()
+              ? 'scheduled'
+              : new Date(ticketType.saleEnd) < new Date()
+                ? 'paused'
+                : 'on-sale';
+
+        logger.info(
+          `Ticket type ${ticketType.id} status updated from ${ticketType.status} to ${status} based on actual sold count`,
+        );
+
         return {
           ...ticketType,
-          price: Number(ticketType.price) / 100,  // Convert from cents to dollars
-          soldCount: Number(ticketType.soldCount) + reservedCount // Add reserved count to sold count
+          soldCount,
+          status,
         };
-      })
+      }),
+    );
+
+    // Get Redis reservation counts for each ticket type
+    const ticketTypesWithReservations = await Promise.all(
+      ticketTypesWithSoldCount.map(async (ticketType) => {
+        const reservedCount = await getReservedTicketCount(ticketType.id);
+        logger.info(
+          `Ticket type ${ticketType.id} has ${reservedCount} tickets reserved in Redis and ${ticketType.soldCount} tickets booked in database`,
+        );
+        return {
+          ...ticketType,
+          price: Number(ticketType.price) / 100, // Convert from cents to dollars
+          reservedCount, // Keep track of reserved count separately
+          soldCount: Number(ticketType.soldCount), // Keep booked count separate
+          totalSoldCount: Number(ticketType.soldCount) + reservedCount, // Add reserved count to sold count for total
+        };
+      }),
     );
 
     return {
       ...event.event,
-      organization: event.organization ? {
-        id: event.organization.id,
-        name: event.organization.name,
-        website: event.organization.website,
-        socialLinks: event.organization.socialLinks,
-      } : undefined,
+      organization: event.organization
+        ? {
+            id: event.organization.id,
+            name: event.organization.name,
+            website: event.organization.website,
+            socialLinks: event.organization.socialLinks,
+          }
+        : undefined,
+      categoryObject: event.category
+        ? {
+            id: event.category.id,
+            name: event.category.name,
+            icon: event.category.icon,
+          }
+        : undefined,
       ticketTypes: ticketTypesWithReservations,
     };
   } catch (error) {
@@ -521,12 +655,33 @@ export async function updateEvent(
       }
     }
 
+    // Check if categoryId is being updated and validate it exists
+    if (data.categoryId) {
+      const [category] = await db
+        .select()
+        .from(categories)
+        .where(eq(categories.id, data.categoryId))
+        .limit(1);
+
+      if (!category) {
+        throw new ValidationError('Invalid category ID');
+      }
+
+      logger.debug(
+        `Updating event to use category: ${category.name} (${data.categoryId})`,
+      );
+    }
+
     const [updatedEvent] = await db
       .update(events)
       .set({
         ...data,
-        startTimestamp: data.startTimestamp ? new Date(data.startTimestamp) : undefined,
-        endTimestamp: data.endTimestamp ? new Date(data.endTimestamp) : undefined,
+        startTimestamp: data.startTimestamp
+          ? new Date(data.startTimestamp)
+          : undefined,
+        endTimestamp: data.endTimestamp
+          ? new Date(data.endTimestamp)
+          : undefined,
         updatedAt: new Date(),
       })
       .where(eq(events.id, id))
@@ -536,7 +691,11 @@ export async function updateEvent(
   } catch (error) {
     logger.error(`Error updating event: ${error}`);
     // Let validation, not found, and forbidden errors propagate as is
-    if (error.name === 'ValidationError' || error.name === 'NotFoundError' || error.name === 'ForbiddenError') {
+    if (
+      error.name === 'ValidationError' ||
+      error.name === 'NotFoundError' ||
+      error.name === 'ForbiddenError'
+    ) {
       throw error;
     }
     // For unknown errors, wrap in AppError
@@ -553,7 +712,10 @@ export async function deleteEvent(
     logger.info(`Deleting event ${id} by user ${userId}`);
     await checkEventOwner(userId, id, userRole);
 
-    const [event] = await db.delete(events).where(eq(events.id, id)).returning();
+    const [event] = await db
+      .delete(events)
+      .where(eq(events.id, id))
+      .returning();
     logger.info(`Event ${id} deleted successfully`);
     return event;
   } catch (error) {
@@ -614,32 +776,97 @@ export async function checkEventExists(eventId: string) {
 export async function getEventsByOrganization(organizationId: string) {
   try {
     logger.info(`Fetching events for organization ${organizationId}`);
+
+    // Get events with tickets sold count
     const result = await db
       .select({
         id: events.id,
         title: events.title,
         startTimestamp: events.startTimestamp,
         status: events.status,
-        ticketsSold: sql<number>`COALESCE((
+        ticketsSold: sql<number>`CAST(COALESCE((
           SELECT COUNT(*)
           FROM ${tickets}
           WHERE ${tickets.eventId} = ${events.id}
           AND ${tickets.status} = 'booked'
-        ), 0)`,
+        ), 0) AS integer)`,
       })
       .from(events)
       .where(eq(events.organizationId, organizationId))
       .orderBy(desc(events.createdAt));
 
-    logger.debug(`Successfully fetched ${result.length} events for organization ${organizationId}`);
-    return result;
+    logger.debug(
+      `Successfully fetched ${result.length} events for organization ${organizationId}`,
+    );
+
+    // Ensure all ticketsSold values are proper numbers
+    const processedResults = result.map((event) => {
+      // Convert ticketsSold to a number explicitly
+      return {
+        ...event,
+        ticketsSold: Number(event.ticketsSold),
+      };
+    });
+
+    // Log ticket counts for debugging
+    for (const event of processedResults) {
+      logger.debug(
+        `Event ${event.id} has ${event.ticketsSold} tickets sold according to SQL expression`,
+      );
+
+      // Double check with direct queries
+      const [bookedCount] = await db
+        .select({
+          count: count(),
+        })
+        .from(tickets)
+        .where(
+          and(eq(tickets.eventId, event.id), eq(tickets.status, 'booked')),
+        );
+
+      const [reservedCount] = await db
+        .select({
+          count: count(),
+        })
+        .from(tickets)
+        .where(
+          and(eq(tickets.eventId, event.id), eq(tickets.status, 'reserved')),
+        );
+
+      const [availableCount] = await db
+        .select({
+          count: count(),
+        })
+        .from(tickets)
+        .where(
+          and(eq(tickets.eventId, event.id), eq(tickets.status, 'available')),
+        );
+
+      logger.debug(
+        `Event ${event.id} detailed counts - Booked: ${bookedCount.count}, Reserved: ${reservedCount.count}, Available: ${availableCount.count}`,
+      );
+
+      // Update the count if needed
+      if (event.ticketsSold !== Number(bookedCount.count)) {
+        logger.warn(
+          `Ticket count mismatch for event ${event.id}: SQL expression returned ${event.ticketsSold} but direct query found ${bookedCount.count} booked tickets`,
+        );
+        event.ticketsSold = Number(bookedCount.count);
+      }
+    }
+
+    return processedResults;
   } catch (error) {
     logger.error(`Error fetching events for organization: ${error}`);
     throw new AppError(500, 'Failed to fetch organization events');
   }
 }
 
-export async function updateTicketType(eventId: string, ticketTypeId: string, data: Partial<TicketTypeSchema>) {
+export async function updateTicketType(
+  eventId: string,
+  ticketTypeId: string,
+  data: Partial<TicketTypeSchema>,
+) {
   try {
     // Get current ticket type
     const [currentTicketType] = await db
@@ -665,7 +892,7 @@ export async function updateTicketType(eventId: string, ticketTypeId: string, da
       // Check if new quantity is less than sold tickets
       if (data.quantity < currentTicketType.soldCount) {
         throw new ValidationError(
-          `Cannot reduce quantity to ${data.quantity}. There are already ${currentTicketType.soldCount} tickets sold.`
+          `Cannot reduce quantity to ${data.quantity}. There are already ${currentTicketType.soldCount} tickets sold.`,
         );
       }
 
@@ -697,7 +924,7 @@ export async function updateTicketType(eventId: string, ticketTypeId: string, da
       if (newTotal > event.capacity) {
         throw new ValidationError(
           `Cannot update quantity. Total tickets would exceed event capacity of ${event.capacity}. ` +
-          `Current total tickets: ${currentTotal}. Maximum additional tickets allowed: ${event.capacity - currentTotal}`
+            `Current total tickets: ${currentTotal}. Maximum additional tickets allowed: ${event.capacity - currentTotal}`,
         );
       }
     }
@@ -707,23 +934,40 @@ export async function updateTicketType(eventId: string, ticketTypeId: string, da
       const saleStart = new Date(data.saleStart);
       const saleEnd = new Date(data.saleEnd);
       if (saleEnd <= saleStart) {
-        throw new ValidationError('Sale end date must be after sale start date');
+        throw new ValidationError(
+          'Sale end date must be after sale start date',
+        );
       }
     }
 
     // Validate min/max per order
-    if (data.minPerOrder && data.maxPerOrder &&
-        Number(data.minPerOrder) > Number(data.maxPerOrder)) {
-      throw new ValidationError('Minimum per order cannot be greater than maximum per order');
+    if (
+      data.minPerOrder &&
+      data.maxPerOrder &&
+      Number(data.minPerOrder) > Number(data.maxPerOrder)
+    ) {
+      throw new ValidationError(
+        'Minimum per order cannot be greater than maximum per order',
+      );
     }
 
-    if (data.maxPerOrder && data.quantity &&
-        Number(data.maxPerOrder) > data.quantity) {
-      throw new ValidationError('Maximum per order cannot exceed total quantity');
+    if (
+      data.maxPerOrder &&
+      data.quantity &&
+      Number(data.maxPerOrder) > data.quantity
+    ) {
+      throw new ValidationError(
+        'Maximum per order cannot exceed total quantity',
+      );
     }
 
     // Calculate the new price in cents
-    const newPriceInCents = data.type === 'free' ? 0 : data.price ? Math.round(data.price * 100) : undefined;
+    const newPriceInCents =
+      data.type === 'free'
+        ? 0
+        : data.price
+          ? Math.round(data.price * 100)
+          : undefined;
 
     // Set price to 0 if type is being changed to 'free'
     const updateData = {
@@ -751,8 +995,8 @@ export async function updateTicketType(eventId: string, ticketTypeId: string, da
         .where(
           and(
             eq(tickets.ticketTypeId, ticketTypeId),
-            eq(tickets.status, 'available')
-          )
+            eq(tickets.status, 'available'),
+          ),
         );
     }
 
@@ -778,7 +1022,11 @@ export async function updateTicketType(eventId: string, ticketTypeId: string, da
   } catch (error) {
     logger.error(`Error updating ticket type: ${error}`);
     // Let validation, not found, and forbidden errors propagate as is
-    if (error.name === 'ValidationError' || error.name === 'NotFoundError' || error.name === 'ForbiddenError') {
+    if (
+      error.name === 'ValidationError' ||
+      error.name === 'NotFoundError' ||
+      error.name === 'ForbiddenError'
+    ) {
       throw error;
     }
     // For unknown errors, wrap in AppError
@@ -797,12 +1045,7 @@ export async function getEventAnalytics(eventId: string) {
         totalRevenue: sql<number>`COALESCE(SUM(${tickets.price}), 0)`,
       })
       .from(tickets)
-      .where(
-        and(
-          eq(tickets.eventId, eventId),
-          eq(tickets.status, 'booked')
-        )
-      );
+      .where(and(eq(tickets.eventId, eventId), eq(tickets.status, 'booked')));
 
     // Get stats per ticket type
     const ticketTypesList = await db
@@ -823,15 +1066,20 @@ export async function getEventAnalytics(eventId: string) {
         `,
       })
       .from(dbTicketTypes)
-      .leftJoin(tickets, and(
-        eq(tickets.ticketTypeId, dbTicketTypes.id),
-        eq(tickets.eventId, eventId)
-      ))
+      .leftJoin(
+        tickets,
+        and(
+          eq(tickets.ticketTypeId, dbTicketTypes.id),
+          eq(tickets.eventId, eventId),
+        ),
+      )
       .where(eq(dbTicketTypes.eventId, eventId))
       .groupBy(dbTicketTypes.id);
 
     // Log ticket type stats for debugging
-    logger.info(`Ticket type stats for event ${eventId}: ${JSON.stringify(ticketTypesList, null, 2)}`);
+    logger.info(
+      `Ticket type stats for event ${eventId}: ${JSON.stringify(ticketTypesList, null, 2)}`,
+    );
 
     // Double check booked tickets directly
     const bookedTickets = await db
@@ -840,15 +1088,12 @@ export async function getEventAnalytics(eventId: string) {
         count: sql<number>`CAST(COUNT(*) AS integer)`,
       })
       .from(tickets)
-      .where(
-        and(
-          eq(tickets.eventId, eventId),
-          eq(tickets.status, 'booked')
-        )
-      )
+      .where(and(eq(tickets.eventId, eventId), eq(tickets.status, 'booked')))
       .groupBy(tickets.ticketTypeId);
 
-    logger.info(`Booked tickets count for event ${eventId}: ${JSON.stringify(bookedTickets, null, 2)}`);
+    logger.info(
+      `Booked tickets count for event ${eventId}: ${JSON.stringify(bookedTickets, null, 2)}`,
+    );
 
     // Get sales by day for the last 30 days
     const thirtyDaysAgo = new Date();
@@ -865,8 +1110,8 @@ export async function getEventAnalytics(eventId: string) {
         and(
           eq(tickets.eventId, eventId),
           eq(tickets.status, 'booked'),
-          sql`${tickets.bookedAt} >= ${thirtyDaysAgo}`
-        )
+          sql`${tickets.bookedAt} >= ${thirtyDaysAgo}`,
+        ),
       )
       .groupBy(sql`DATE(${tickets.bookedAt})`)
       .orderBy(sql`DATE(${tickets.bookedAt})`);
@@ -874,12 +1119,12 @@ export async function getEventAnalytics(eventId: string) {
     return {
       totalTicketsSold: Number(totals.totalTicketsSold),
       totalRevenue: Number(totals.totalRevenue) / 100, // Convert from cents to dollars
-      ticketTypeStats: ticketTypesList.map(stat => ({
+      ticketTypeStats: ticketTypesList.map((stat) => ({
         ...stat,
         totalSold: Number(stat.totalSold),
         totalRevenue: Number(stat.totalRevenue) / 100, // Convert from cents to dollars
       })),
-      salesByDay: salesByDay.map(day => ({
+      salesByDay: salesByDay.map((day) => ({
         ...day,
         count: Number(day.count),
         revenue: Number(day.revenue) / 100, // Convert from cents to dollars

@@ -6,6 +6,7 @@ import {
   events,
   tickets,
   categories,
+  ticketTypes,
 } from '../../db/schema';
 import { AppError } from '../../utils/errors';
 
@@ -62,6 +63,10 @@ export async function seedDatabase() {
             { name: 'Family' },
             { name: 'Comedy' },
             { name: 'Business' },
+            { name: 'Technology' },
+            { name: 'Food & Drink' },
+            { name: 'Health & Wellness' },
+            { name: 'Education' },
           ]);
         logger.info('Successfully seeded categories table');
       } catch (error) {
@@ -143,24 +148,32 @@ export async function seedDatabase() {
       try {
         await db.insert(events).values([
           {
-            name: 'Test Event 1',
+            title: 'Test Event 1',
             description: 'A test event',
             startTimestamp: new Date('2024-12-01'),
             endTimestamp: new Date('2024-12-02'),
-            organizationId: orgs[0].id,
+            venue: 'Test Venue 1',
+            address: '123 Test St, Bangkok',
             categoryId: cats[0].id,
+            category: cats[0].name,
+            isOnline: false,
             capacity: 1000,
-            isPublished: true,
+            organizationId: orgs[0].id,
+            status: 'published',
           },
           {
-            name: 'Test Event 2',
+            title: 'Test Event 2',
             description: 'Another test event',
             startTimestamp: new Date('2024-12-03'),
             endTimestamp: new Date('2024-12-04'),
-            organizationId: orgs[1].id,
+            venue: 'Test Venue 2',
+            address: '456 Test Ave, Bangkok',
             categoryId: cats[1].id,
+            category: cats[1].name,
+            isOnline: false,
             capacity: 500,
-            isPublished: true,
+            organizationId: orgs[1].id,
+            status: 'published',
           },
         ]);
         logger.info('Successfully seeded events table');
@@ -173,35 +186,100 @@ export async function seedDatabase() {
       }
     }
 
+    // Check and seed ticket types
+    if (await hasData(ticketTypes)) {
+      logger.info(
+        'Ticket types table already has data, skipping ticket type seeding',
+      );
+    } else {
+      const evts = await db.select().from(events);
+
+      if (evts.length === 0) {
+        logger.warn('Skipping ticket type seeding due to missing event data');
+        throw new AppError(500, 'Failed to seed ticket types: No events found');
+      }
+
+      logger.info('Seeding ticket types table...');
+      try {
+        await db.insert(ticketTypes).values([
+          {
+            name: 'VIP',
+            description: 'VIP access with premium seating',
+            price: 10000, // $100.00
+            quantity: 50,
+            type: 'paid',
+            saleStart: new Date('2024-11-01'),
+            saleEnd: new Date('2024-11-30'),
+            maxPerOrder: 4,
+            minPerOrder: 1,
+            eventId: evts[0].id,
+          },
+          {
+            name: 'Regular',
+            description: 'Standard admission',
+            price: 5000, // $50.00
+            quantity: 200,
+            type: 'paid',
+            saleStart: new Date('2024-11-01'),
+            saleEnd: new Date('2024-11-30'),
+            maxPerOrder: 8,
+            minPerOrder: 1,
+            eventId: evts[0].id,
+          },
+          {
+            name: 'General',
+            description: 'General admission',
+            price: 7500, // $75.00
+            quantity: 100,
+            type: 'paid',
+            saleStart: new Date('2024-11-01'),
+            saleEnd: new Date('2024-11-30'),
+            maxPerOrder: 6,
+            minPerOrder: 1,
+            eventId: evts[1].id,
+          },
+        ]);
+        logger.info('Successfully seeded ticket types table');
+      } catch (error) {
+        logger.error(`Error seeding ticket types table: ${error}`);
+        throw new AppError(
+          500,
+          `Failed to seed ticket types table: ${error.message}`,
+        );
+      }
+    }
+
     // Check and seed tickets
     if (await hasData(tickets)) {
       logger.info('Tickets table already has data, skipping ticket seeding');
     } else {
       const evts = await db.select().from(events);
+      const types = await db.select().from(ticketTypes);
 
-      if (evts.length === 0) {
-        logger.warn('Skipping ticket seeding due to missing event data');
-        throw new AppError(500, 'Failed to seed tickets: No events found');
+      if (evts.length === 0 || types.length === 0) {
+        logger.warn('Skipping ticket seeding due to missing required data');
+        throw new AppError(
+          500,
+          'Failed to seed tickets: Missing required data',
+        );
       }
 
       logger.info('Seeding tickets table...');
       try {
-        await db.insert(tickets).values([
-          {
-            name: 'VIP',
-            seatNumber: 'A1',
+        // Create some sample tickets for the first ticket type
+        const ticketsToCreate = [];
+        for (let i = 1; i <= 5; i++) {
+          ticketsToCreate.push({
+            name: `VIP Ticket ${i}`,
             eventId: evts[0].id,
-            price: 100,
-            status: 'available',
-          },
-          {
-            name: 'Regular',
-            seatNumber: 'B1',
-            eventId: evts[0].id,
-            price: 50,
-            status: 'available',
-          },
-        ]);
+            ticketTypeId: types[0].id,
+            price: types[0].price,
+            currency: 'usd',
+            status: 'available' as 'available' | 'reserved' | 'booked',
+          });
+        }
+
+        await db.insert(tickets).values(ticketsToCreate);
         logger.info('Successfully seeded tickets table');
       } catch (error) {
         logger.error(`Error seeding tickets table: ${error}`);

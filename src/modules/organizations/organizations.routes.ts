@@ -4,6 +4,8 @@ import {
   getOrganizationHandler,
   updateOrganizationHandler,
   getMyOrganizationsHandler,
+  getOrganizationAnalyticsHandler,
+  getMyOrganizationAnalyticsHandler,
 } from './organizations.controllers';
 import {
   updateOrganizationSchema,
@@ -31,6 +33,15 @@ export async function organizationRoutes(app: FastifyInstance) {
     getMyOrganizationsHandler,
   );
 
+  // Get my organization analytics
+  app.get(
+    '/me/analytics',
+    {
+      preHandler: [authenticateRequest],
+    },
+    getMyOrganizationAnalyticsHandler,
+  );
+
   // Get organization by ID
   app.get<{ Params: { id: string } }>(
     '/:id',
@@ -38,6 +49,15 @@ export async function organizationRoutes(app: FastifyInstance) {
       preHandler: [authenticateRequest],
     },
     getOrganizationHandler,
+  );
+
+  // Get organization analytics by ID
+  app.get<{ Params: { id: string } }>(
+    '/:id/analytics',
+    {
+      preHandler: [authenticateRequest],
+    },
+    getOrganizationAnalyticsHandler,
   );
 
   // Update organization (admin or owner)

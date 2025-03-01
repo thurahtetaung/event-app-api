@@ -15,6 +15,20 @@
       "when": 1739896721899,
       "tag": "0001_jittery_shadowcat",
       "breakpoints": false
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1740854861288,
+      "tag": "0002_remarkable_zaran",
+      "breakpoints": false
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1740855660499,
+      "tag": "0003_shiny_spitfire",
+      "breakpoints": false
     }
   ]
 }
