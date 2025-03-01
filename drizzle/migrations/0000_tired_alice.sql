@@ -1,3 +1,4 @@
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE TYPE "public"."event_status" AS ENUM('draft', 'published', 'cancelled');
 CREATE TYPE "public"."event_types" AS ENUM('conference', 'workshop', 'concert', 'exhibition', 'sports', 'networking', 'festival', 'corporate');
 CREATE TYPE "public"."order_status" AS ENUM('pending', 'completed', 'failed', 'cancelled');
