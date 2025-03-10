@@ -12,7 +12,7 @@ import {
   getOrganizerApplicationByUserId,
   getPendingApplicationsStats,
 } from './organizer-applications.services';
-import { AppError, NotFoundError } from '../../utils/errors';
+import { handleError } from '../../utils/errors';
 import { logger } from '../../utils/logger';
 
 export async function createOrganizerApplicationHandler(
@@ -38,10 +38,7 @@ export async function createOrganizerApplicationHandler(
     );
     return reply.code(201).send(application);
   } catch (error) {
-    if (error instanceof AppError) {
-      return reply.code(error.statusCode).send({ message: error.message });
-    }
-    return reply.code(500).send({ message: 'Internal server error' });
+    return handleError(error, request, reply);
   }
 }
 
@@ -53,10 +50,7 @@ export async function getOrganizerApplicationsHandler(
     const applications = await getOrganizerApplications();
     return reply.code(200).send(applications);
   } catch (error) {
-    if (error instanceof AppError) {
-      return reply.code(error.statusCode).send({ message: error.message });
-    }
-    return reply.code(500).send({ message: 'Internal server error' });
+    return handleError(error, request, reply);
   }
 }
 
@@ -70,13 +64,7 @@ export async function getOrganizerApplicationHandler(
     const application = await getOrganizerApplicationById(request.params.id);
     return reply.code(200).send(application);
   } catch (error) {
-    if (error instanceof NotFoundError) {
-      return reply.code(404).send({ message: error.message });
-    }
-    if (error instanceof AppError) {
-      return reply.code(error.statusCode).send({ message: error.message });
-    }
-    return reply.code(500).send({ message: 'Internal server error' });
+    return handleError(error, request, reply);
   }
 }
 
@@ -95,13 +83,7 @@ export async function updateOrganizerApplicationStatusHandler(
     );
     return reply.code(200).send(application);
   } catch (error) {
-    if (error instanceof NotFoundError) {
-      return reply.code(404).send({ message: error.message });
-    }
-    if (error instanceof AppError) {
-      return reply.code(error.statusCode).send({ message: error.message });
-    }
-    return reply.code(500).send({ message: 'Internal server error' });
+    return handleError(error, request, reply);
   }
 }
 
@@ -113,13 +95,7 @@ export async function getCurrentUserApplicationHandler(
     const application = await getOrganizerApplicationByUserId(request.user.id);
     return reply.code(200).send(application);
   } catch (error) {
-    if (error instanceof NotFoundError) {
-      return reply.code(404).send({ message: error.message });
-    }
-    if (error instanceof AppError) {
-      return reply.code(error.statusCode).send({ message: error.message });
-    }
-    return reply.code(500).send({ message: 'Internal server error' });
+    return handleError(error, request, reply);
   }
 }
 
@@ -131,10 +107,6 @@ export async function getPendingApplicationsStatsHandler(
     const stats = await getPendingApplicationsStats();
     return reply.code(200).send(stats);
   } catch (error) {
-    logger.error(`Error getting pending applications stats: ${error}`);
-    if (error instanceof AppError) {
-      throw error;
-    }
-    throw new AppError(500, 'Failed to get pending applications statistics');
+    return handleError(error, request, reply);
   }
 }

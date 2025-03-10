@@ -22,7 +22,7 @@ import { logger } from '../../utils/logger';
 import { eq } from 'drizzle-orm';
 import { organizations, events } from '../../db/schema';
 import { db } from '../../db';
-import { ValidationError, NotFoundError, ForbiddenError } from '../../utils/errors';
+import { handleError } from '../../utils/errors';
 
 interface RequestWithParams {
   Params: {
@@ -47,14 +47,18 @@ export async function createEventHandler(
       .limit(1);
 
     if (!organization) {
-      return reply.code(403).send({ error: 'You must create an organization first' });
+      return reply
+        .code(403)
+        .send({ error: 'You must create an organization first' });
     }
 
     // Log the request body and organization ID for debugging
-    logger.debug(`Creating event with data: ${JSON.stringify({
-      body: request.body,
-      organizationId: organization.id
-    })}`);
+    logger.debug(
+      `Creating event with data: ${JSON.stringify({
+        body: request.body,
+        organizationId: organization.id,
+      })}`,
+    );
 
     const event = await createEvent({
       ...request.body,
@@ -63,17 +67,7 @@ export async function createEventHandler(
 
     return reply.code(201).send(event);
   } catch (error) {
-    logger.error(`Error creating event: ${error}`);
-    if (error.name === 'ValidationError') {
-      return reply.code(400).send({ error: error.message });
-    }
-    if (error.name === 'NotFoundError') {
-      return reply.code(404).send({ error: error.message });
-    }
-    if (error.name === 'ForbiddenError') {
-      return reply.code(403).send({ error: error.message });
-    }
-    return reply.code(500).send({ error: 'Failed to create event' });
+    return handleError(error, request, reply);
   }
 }
 
@@ -92,15 +86,21 @@ export async function getEventsHandler(
       maxPrice?: string;
       isOnline?: string;
       isInPerson?: string;
+      limit?: string;
     };
 
     logger.debug('Received query params:', queryParams);
 
-    const events = await getEvents(queryParams);
+    // Convert limit to a number if it exists
+    const parsedParams = {
+      ...queryParams,
+      limit: queryParams.limit ? parseInt(queryParams.limit) : undefined,
+    };
+
+    const events = await getEvents(parsedParams);
     return reply.code(200).send(events);
   } catch (error) {
-    logger.error(`Error getting events: ${error}`);
-    return reply.code(500).send({ error: 'Failed to get events' });
+    return handleError(error, request, reply);
   }
 }
 
@@ -115,11 +115,7 @@ export async function getEventHandler(
     }
     return reply.code(200).send(event);
   } catch (error) {
-    logger.error(`Error getting event: ${error}`);
-    if (error.name === 'NotFoundError') {
-      return reply.code(404).send({ error: error.message });
-    }
-    return reply.code(500).send({ error: 'Failed to get event' });
+    return handleError(error, request, reply);
   }
 }
 
@@ -140,17 +136,7 @@ export async function updateEventHandler(
     );
     return reply.code(200).send(event);
   } catch (error) {
-    logger.error(`Error updating event: ${error}`);
-    if (error.name === 'ValidationError') {
-      return reply.code(400).send({ error: error.message });
-    }
-    if (error.name === 'NotFoundError') {
-      return reply.code(404).send({ error: error.message });
-    }
-    if (error.name === 'ForbiddenError') {
-      return reply.code(403).send({ error: error.message });
-    }
-    return reply.code(500).send({ error: 'Failed to update event' });
+    return handleError(error, request, reply);
   }
 }
 
@@ -160,15 +146,10 @@ export async function deleteEventHandler(
 ) {
   try {
     await checkEventExists(request.params.id);
-    await deleteEvent(
-      request.user.id,
-      request.params.id,
-      request.user.role,
-    );
+    await deleteEvent(request.user.id, request.params.id, request.user.role);
     return reply.code(200).send({ message: 'Event deleted successfully' });
   } catch (error) {
-    logger.error(`Error deleting event: ${error}`);
-    return reply.code(500).send({ error: 'Failed to delete event' });
+    return handleError(error, request, reply);
   }
 }
 
@@ -188,8 +169,7 @@ export async function updateEventPublishStatusHandler(
     );
     return reply.code(200).send(event);
   } catch (error) {
-    logger.error(`Error updating event status: ${error}`);
-    return reply.code(500).send({ error: 'Failed to update event status' });
+    return handleError(error, request, reply);
   }
 }
 
@@ -211,10 +191,7 @@ export async function createTicketTypeHandler(
         organization: organizations,
       })
       .from(events)
-      .innerJoin(
-        organizations,
-        eq(events.organizationId, organizations.id),
-      )
+      .innerJoin(organizations, eq(events.organizationId, organizations.id))
       .where(eq(events.id, eventId))
       .limit(1);
 
@@ -234,17 +211,7 @@ export async function createTicketTypeHandler(
 
     return reply.code(201).send(ticketType);
   } catch (error) {
-    logger.error(`Error creating ticket type: ${error}`);
-    if (error.name === 'ValidationError') {
-      return reply.code(400).send({ error: error.message });
-    }
-    if (error.name === 'NotFoundError') {
-      return reply.code(404).send({ error: error.message });
-    }
-    if (error.name === 'ForbiddenError') {
-      return reply.code(403).send({ error: error.message });
-    }
-    return reply.code(500).send({ error: 'Failed to create ticket type' });
+    return handleError(error, request, reply);
   }
 }
 
@@ -263,14 +230,15 @@ export async function getOrganizerEventsHandler(
       .limit(1);
 
     if (!organization) {
-      return reply.code(403).send({ error: 'You must create an organization first' });
+      return reply
+        .code(403)
+        .send({ error: 'You must create an organization first' });
     }
 
     const events = await getEventsByOrganization(organization.id);
     return reply.code(200).send(events);
   } catch (error) {
-    logger.error(`Error getting organizer events: ${error}`);
-    return reply.code(500).send({ error: 'Failed to get events' });
+    return handleError(error, request, reply);
   }
 }
 
@@ -292,10 +260,7 @@ export async function updateTicketTypeHandler(
         organization: organizations,
       })
       .from(events)
-      .innerJoin(
-        organizations,
-        eq(events.organizationId, organizations.id),
-      )
+      .innerJoin(organizations, eq(events.organizationId, organizations.id))
       .where(eq(events.id, eventId))
       .limit(1);
 
@@ -308,20 +273,14 @@ export async function updateTicketTypeHandler(
       return reply.code(403).send({ error: 'Unauthorized' });
     }
 
-    const ticketType = await updateTicketType(eventId, ticketTypeId, request.body);
+    const ticketType = await updateTicketType(
+      eventId,
+      ticketTypeId,
+      request.body,
+    );
     return reply.code(200).send(ticketType);
   } catch (error) {
-    logger.error(`Error updating ticket type: ${error}`);
-    if (error.name === 'ValidationError') {
-      return reply.code(400).send({ error: error.message });
-    }
-    if (error.name === 'NotFoundError') {
-      return reply.code(404).send({ error: error.message });
-    }
-    if (error.name === 'ForbiddenError') {
-      return reply.code(403).send({ error: error.message });
-    }
-    return reply.code(500).send({ error: 'Failed to update ticket type' });
+    return handleError(error, request, reply);
   }
 }
 
@@ -337,7 +296,6 @@ export async function getEventAnalyticsHandler(
     const analytics = await getEventAnalytics(request.params.id);
     return reply.code(200).send(analytics);
   } catch (error) {
-    logger.error(`Error getting event analytics: ${error}`);
-    return reply.code(500).send({ error: 'Failed to get event analytics' });
+    return handleError(error, request, reply);
   }
 }

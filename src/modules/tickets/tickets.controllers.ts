@@ -3,6 +3,9 @@ import {
   CreateTicketsSchema,
   UpdateTicketStatusInput,
   GetTicketAccessTokenParams,
+  ValidateTicketParams,
+  ValidateTicketQuery,
+  GetTicketDetailsParams,
 } from './tickets.schema';
 import {
   createTicketsForTicketType,
@@ -12,13 +15,12 @@ import {
   purchaseTickets,
   reserveTickets,
   getTicketAccessToken,
+  verifyTicketWithAccessToken,
+  validateTicket,
+  getTicketDetails,
 } from './tickets.services';
 import { logger } from '../../utils/logger';
-import {
-  NotFoundError,
-  ForbiddenError,
-  ValidationError,
-} from '../../utils/errors';
+import { handleError } from '../../utils/errors';
 import { releaseUserTickets } from '../../utils/redis';
 
 export async function createTicketsHandler(
@@ -34,11 +36,7 @@ export async function createTicketsHandler(
     );
     return reply.code(201).send(result);
   } catch (error) {
-    logger.error(`Error creating tickets in controller: ${error}`);
-    if (error instanceof Error) {
-      return reply.code(400).send({ message: error.message });
-    }
-    return reply.code(500).send({ message: 'Internal server error' });
+    return handleError(error, request, reply);
   }
 }
 
@@ -56,11 +54,7 @@ export async function updateTicketStatusHandler(
     );
     return reply.code(200).send(result);
   } catch (error) {
-    logger.error(`Error updating ticket status in controller: ${error}`);
-    if (error instanceof Error) {
-      return reply.code(400).send({ message: error.message });
-    }
-    return reply.code(500).send({ message: 'Internal server error' });
+    return handleError(error, request, reply);
   }
 }
 
@@ -77,11 +71,7 @@ export async function getAvailableTicketsHandler(
     );
     return reply.code(200).send(result);
   } catch (error) {
-    logger.error(`Error getting available tickets in controller: ${error}`);
-    if (error instanceof Error) {
-      return reply.code(400).send({ message: error.message });
-    }
-    return reply.code(500).send({ message: 'Internal server error' });
+    return handleError(error, request, reply);
   }
 }
 
@@ -93,11 +83,7 @@ export async function getTicketsByUserHandler(
     const result = await getTicketsByUser(request.user.id);
     return reply.code(200).send(result);
   } catch (error) {
-    logger.error(`Error getting user tickets in controller: ${error}`);
-    if (error instanceof Error) {
-      return reply.code(400).send({ message: error.message });
-    }
-    return reply.code(500).send({ message: 'Internal server error' });
+    return handleError(error, request, reply);
   }
 }
 
@@ -115,11 +101,7 @@ export async function purchaseTicketsHandler(
     const result = await purchaseTickets(request.user.id, request.body);
     return reply.code(200).send(result);
   } catch (error) {
-    logger.error(`Error purchasing tickets in controller: ${error}`);
-    if (error instanceof Error) {
-      return reply.code(400).send({ message: error.message });
-    }
-    return reply.code(500).send({ message: 'Internal server error' });
+    return handleError(error, request, reply);
   }
 }
 
@@ -136,11 +118,7 @@ export async function reserveTicketsHandler(
     const result = await reserveTickets(request.user.id, request.body);
     return reply.code(200).send(result);
   } catch (error) {
-    logger.error(`Error reserving tickets: ${error}`);
-    if (error instanceof Error) {
-      return reply.code(400).send({ message: error.message });
-    }
-    return reply.code(500).send({ message: 'Failed to reserve tickets' });
+    return handleError(error, request, reply);
   }
 }
 
@@ -158,17 +136,75 @@ export async function getTicketAccessTokenHandler(
     );
     return reply.code(200).send(result);
   } catch (error) {
-    logger.error(`Error getting ticket access token in controller: ${error}`);
-    if (error instanceof NotFoundError) {
-      return reply.code(404).send({ message: error.message });
-    }
-    if (error instanceof ForbiddenError) {
-      return reply.code(403).send({ message: error.message });
-    }
-    if (error instanceof ValidationError) {
-      return reply.code(400).send({ message: error.message });
-    }
-    return reply.code(500).send({ message: 'Internal server error' });
+    return handleError(error, request, reply);
+  }
+}
+
+export async function verifyTicketHandler(
+  request: FastifyRequest<{
+    Params: ValidateTicketParams;
+    Querystring: ValidateTicketQuery;
+  }>,
+  reply: FastifyReply,
+) {
+  try {
+    const { eventId, ticketId } = request.params;
+    const { accessToken } = request.query;
+
+    logger.info(`Verifying ticket ${ticketId} for event ${eventId}`);
+
+    const result = await verifyTicketWithAccessToken(
+      eventId,
+      ticketId,
+      accessToken,
+    );
+
+    return reply.code(200).send(result);
+  } catch (error) {
+    return handleError(error, request, reply);
+  }
+}
+
+export async function validateTicketHandler(
+  request: FastifyRequest<{
+    Params: ValidateTicketParams;
+    Body: { accessToken: string };
+  }>,
+  reply: FastifyReply,
+) {
+  try {
+    const { eventId, ticketId } = request.params;
+    const { accessToken } = request.body;
+    const userId = request.user.id;
+
+    logger.info(`Validating ticket ${ticketId} for event ${eventId}`);
+
+    const result = await validateTicket(userId, eventId, ticketId, accessToken);
+
+    return reply.code(200).send(result);
+  } catch (error) {
+    return handleError(error, request, reply);
+  }
+}
+
+export async function getTicketDetailsHandler(
+  request: FastifyRequest<{
+    Params: GetTicketDetailsParams;
+  }>,
+  reply: FastifyReply,
+) {
+  try {
+    const { eventId, ticketId } = request.params;
+
+    logger.info(
+      `Getting ticket details for ticket ${ticketId} for event ${eventId}`,
+    );
+
+    const result = await getTicketDetails(eventId, ticketId);
+
+    return reply.code(200).send(result);
+  } catch (error) {
+    return handleError(error, request, reply);
   }
 }
 
@@ -195,12 +231,6 @@ export async function releaseReservationsHandler(
       message: 'All ticket reservations released successfully',
     });
   } catch (error) {
-    logger.error(`Error releasing ticket reservations: ${error}`);
-    if (error instanceof Error) {
-      return reply.code(400).send({ message: error.message });
-    }
-    return reply
-      .code(500)
-      .send({ message: 'Failed to release ticket reservations' });
+    return handleError(error, request, reply);
   }
 }

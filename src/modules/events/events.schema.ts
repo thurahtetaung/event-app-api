@@ -70,6 +70,10 @@ export const eventQuerySchema = z.object({
   maxPrice: z.string().optional(),
   isOnline: z.enum(['true', 'false']).optional(),
   isInPerson: z.enum(['true', 'false']).optional(),
+  limit: z
+    .string()
+    .optional()
+    .transform((val) => (val ? parseInt(val) : undefined)),
 });
 
 // ID parameter schema

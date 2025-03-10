@@ -8,6 +8,7 @@ import {
 } from './organizations.services';
 import { UpdateOrganizationInput } from './organizations.schema';
 import { logger } from '../../utils/logger';
+import { handleError } from '../../utils/errors';
 
 export async function getOrganizationsHandler(
   request: FastifyRequest,
@@ -17,11 +18,7 @@ export async function getOrganizationsHandler(
     const organizations = await getOrganizations();
     return reply.code(200).send(organizations);
   } catch (error) {
-    logger.error(`Error getting organizations in controller: ${error}`);
-    if (error instanceof Error) {
-      return reply.code(400).send({ message: error.message });
-    }
-    return reply.code(500).send({ message: 'Internal server error' });
+    return handleError(error, request, reply);
   }
 }
 
@@ -35,11 +32,7 @@ export async function getOrganizationHandler(
     const organization = await getOrganizationById(request.params.id);
     return reply.code(200).send(organization);
   } catch (error) {
-    logger.error(`Error getting organization in controller: ${error}`);
-    if (error instanceof Error) {
-      return reply.code(400).send({ message: error.message });
-    }
-    return reply.code(500).send({ message: 'Internal server error' });
+    return handleError(error, request, reply);
   }
 }
 
@@ -51,11 +44,7 @@ export async function getMyOrganizationsHandler(
     const organization = await getCurrentOrganization(request.user.id);
     return reply.code(200).send(organization || null);
   } catch (error) {
-    logger.error(`Error getting user organizations in controller: ${error}`);
-    if (error instanceof Error) {
-      return reply.code(400).send({ message: error.message });
-    }
-    return reply.code(500).send({ message: 'Internal server error' });
+    return handleError(error, request, reply);
   }
 }
 
@@ -75,11 +64,7 @@ export async function updateOrganizationHandler(
     );
     return reply.code(200).send(organization);
   } catch (error) {
-    logger.error(`Error updating organization in controller: ${error}`);
-    if (error instanceof Error) {
-      return reply.code(400).send({ message: error.message });
-    }
-    return reply.code(500).send({ message: 'Internal server error' });
+    return handleError(error, request, reply);
   }
 }
 
@@ -98,13 +83,7 @@ export async function getOrganizationAnalyticsHandler(
     const analytics = await getOrganizationAnalytics(request.params.id);
     return reply.code(200).send(analytics);
   } catch (error) {
-    logger.error(
-      `Error getting organization analytics in controller: ${error}`,
-    );
-    if (error instanceof Error) {
-      return reply.code(400).send({ message: error.message });
-    }
-    return reply.code(500).send({ message: 'Internal server error' });
+    return handleError(error, request, reply);
   }
 }
 
@@ -127,12 +106,6 @@ export async function getMyOrganizationAnalyticsHandler(
     const analytics = await getOrganizationAnalytics(organization.id);
     return reply.code(200).send(analytics);
   } catch (error) {
-    logger.error(
-      `Error getting user's organization analytics in controller: ${error}`,
-    );
-    if (error instanceof Error) {
-      return reply.code(400).send({ message: error.message });
-    }
-    return reply.code(500).send({ message: 'Internal server error' });
+    return handleError(error, request, reply);
   }
 }

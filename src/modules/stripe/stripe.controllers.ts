@@ -12,6 +12,7 @@ import {
 } from './stripe.services';
 import { StripeAccountInput, StripeAccountStatusInput } from './stripe.schema';
 import { logger } from '../../utils/logger';
+import { handleError } from '../../utils/errors';
 
 export async function connectStripeAccountHandler(
   request: FastifyRequest<{
@@ -23,10 +24,7 @@ export async function connectStripeAccountHandler(
     const result = await createStripeConnectAccount(request.body);
     return reply.code(200).send(result);
   } catch (error) {
-    if (error instanceof Error) {
-      return reply.code(400).send({ message: error.message });
-    }
-    return reply.code(500).send({ message: 'Internal server error' });
+    return handleError(error, request, reply);
   }
 }
 
@@ -46,10 +44,7 @@ export async function completeStripeOnboardingHandler(
     );
     return reply.code(200).send(updatedOrg);
   } catch (error) {
-    if (error instanceof Error) {
-      return reply.code(400).send({ message: error.message });
-    }
-    return reply.code(500).send({ message: 'Internal server error' });
+    return handleError(error, request, reply);
   }
 }
 
@@ -63,10 +58,7 @@ export async function refreshStripeOnboardingHandler(
     const result = await refreshStripeOnboarding(request.params.organizationId);
     return reply.code(200).send(result);
   } catch (error) {
-    if (error instanceof Error) {
-      return reply.code(400).send({ message: error.message });
-    }
-    return reply.code(500).send({ message: 'Internal server error' });
+    return handleError(error, request, reply);
   }
 }
 
@@ -80,10 +72,7 @@ export async function updateStripeAccountStatusHandler(
     const organization = await updateStripeAccountStatus(request.body);
     return reply.code(200).send(organization);
   } catch (error) {
-    if (error instanceof Error) {
-      return reply.code(400).send({ message: error.message });
-    }
-    return reply.code(500).send({ message: 'Internal server error' });
+    return handleError(error, request, reply);
   }
 }
 
@@ -96,10 +85,6 @@ export async function stripeWebhookHandler(
     await handleStripeWebhook(signature, request.rawBody as Buffer);
     return reply.code(200).send({ received: true });
   } catch (error) {
-    logger.error(`Error handling Stripe webhook in controller: ${error}`);
-    if (error instanceof Error) {
-      return reply.code(400).send({ message: error.message });
-    }
-    return reply.code(500).send({ message: 'Internal server error' });
+    return handleError(error, request, reply);
   }
 }

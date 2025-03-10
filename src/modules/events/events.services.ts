@@ -93,6 +93,13 @@ export async function createEvent(data: EventSchema) {
       throw new ValidationError('Missing required fields');
     }
 
+    // Validate start and end timestamps
+    const startDate = new Date(data.startTimestamp);
+    const endDate = new Date(data.endTimestamp);
+    if (endDate <= startDate) {
+      throw new ValidationError('End time must be after start time');
+    }
+
     // Fetch the category to ensure it exists
     if (data.categoryId) {
       const [category] = await db
@@ -267,6 +274,7 @@ export async function getEvents(params?: {
   maxPrice?: string;
   isOnline?: boolean | string;
   isInPerson?: boolean | string;
+  limit?: number;
 }) {
   try {
     // Safe parameter logging
@@ -415,26 +423,39 @@ export async function getEvents(params?: {
       .leftJoin(categories, eq(events.categoryId, categories.id))
       .where(and(...conditions));
 
-    // Add ordering based on sort parameter
-    const result = await (params?.sort === 'price-low'
-      ? baseQuery.orderBy(sql`COALESCE(
-          (
-            SELECT MIN(${dbTicketTypes.price})
-            FROM ${dbTicketTypes}
-            WHERE ${dbTicketTypes.eventId} = ${events.id}
-          ),
-          0
-        ) ASC`)
-      : params?.sort === 'price-high'
-        ? baseQuery.orderBy(sql`COALESCE(
-          (
-            SELECT MIN(${dbTicketTypes.price})
-            FROM ${dbTicketTypes}
-            WHERE ${dbTicketTypes.eventId} = ${events.id}
-          ),
-          0
-        ) DESC`)
-        : baseQuery.orderBy(desc(events.startTimestamp)));
+    // Build the query with sorting and limit
+    let query;
+
+    // Apply sorting
+    if (params?.sort === 'price-low') {
+      query = baseQuery.orderBy(sql`COALESCE(
+        (
+          SELECT MIN(${dbTicketTypes.price})
+          FROM ${dbTicketTypes}
+          WHERE ${dbTicketTypes.eventId} = ${events.id}
+        ),
+        0
+      ) ASC`);
+    } else if (params?.sort === 'price-high') {
+      query = baseQuery.orderBy(sql`COALESCE(
+        (
+          SELECT MIN(${dbTicketTypes.price})
+          FROM ${dbTicketTypes}
+          WHERE ${dbTicketTypes.eventId} = ${events.id}
+        ),
+        0
+      ) DESC`);
+    } else {
+      query = baseQuery.orderBy(desc(events.startTimestamp));
+    }
+
+    // Apply limit if specified
+    if (params?.limit && params.limit > 0) {
+      query = query.limit(params.limit);
+      logger.debug(`Applied limit: ${params.limit}`);
+    }
+
+    const result = await query;
 
     // Transform result to include ticket types
     const eventsWithTickets = await Promise.all(
@@ -1095,10 +1116,7 @@ export async function getEventAnalytics(eventId: string) {
       `Booked tickets count for event ${eventId}: ${JSON.stringify(bookedTickets, null, 2)}`,
     );
 
-    // Get sales by day for the last 30 days
-    const thirtyDaysAgo = new Date();
-    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-
+    // Get sales by day for all time
     const salesByDay = await db
       .select({
         date: sql<string>`DATE(${tickets.bookedAt})::text`,
@@ -1106,13 +1124,7 @@ export async function getEventAnalytics(eventId: string) {
         revenue: sql<number>`COALESCE(SUM(${tickets.price}), 0)`,
       })
       .from(tickets)
-      .where(
-        and(
-          eq(tickets.eventId, eventId),
-          eq(tickets.status, 'booked'),
-          sql`${tickets.bookedAt} >= ${thirtyDaysAgo}`,
-        ),
-      )
+      .where(and(eq(tickets.eventId, eventId), eq(tickets.status, 'booked')))
       .groupBy(sql`DATE(${tickets.bookedAt})`)
       .orderBy(sql`DATE(${tickets.bookedAt})`);
 

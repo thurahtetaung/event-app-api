@@ -12,6 +12,7 @@ import {
   updateCategory,
 } from './categories.services';
 import { logger } from '../../utils/logger';
+import { handleError } from '../../utils/errors';
 
 export async function createCategoryHandler(
   request: FastifyRequest<{
@@ -23,8 +24,7 @@ export async function createCategoryHandler(
     const category = await createCategory(request.body);
     return reply.code(201).send(category);
   } catch (error) {
-    logger.error(`Error in createCategoryHandler: ${error}`);
-    return reply.code(500).send({ message: 'Internal server error' });
+    return handleError(error, request, reply);
   }
 }
 
@@ -36,8 +36,7 @@ export async function getCategoriesHandler(
     const categories = await getCategories();
     return reply.code(200).send(categories);
   } catch (error) {
-    logger.error(`Error in getCategoriesHandler: ${error}`);
-    return reply.code(500).send({ message: 'Internal server error' });
+    return handleError(error, _request, reply);
   }
 }
 
@@ -56,8 +55,7 @@ export async function getCategoryByIdHandler(
 
     return reply.code(200).send(category);
   } catch (error) {
-    logger.error(`Error in getCategoryByIdHandler: ${error}`);
-    return reply.code(500).send({ message: 'Internal server error' });
+    return handleError(error, request, reply);
   }
 }
 
@@ -77,8 +75,7 @@ export async function updateCategoryHandler(
 
     return reply.code(200).send(category);
   } catch (error) {
-    logger.error(`Error in updateCategoryHandler: ${error}`);
-    return reply.code(500).send({ message: 'Internal server error' });
+    return handleError(error, request, reply);
   }
 }
 
@@ -97,7 +94,6 @@ export async function deleteCategoryHandler(
 
     return reply.code(200).send(category);
   } catch (error) {
-    logger.error(`Error in deleteCategoryHandler: ${error}`);
-    return reply.code(500).send({ message: 'Internal server error' });
+    return handleError(error, request, reply);
   }
 }

@@ -4,6 +4,10 @@ import { organizations, categories } from '../../db/schema';
 import { logger } from '../../utils/logger';
 import { AppError, NotFoundError, ForbiddenError } from '../../utils/errors';
 import { UpdateOrganizationInput } from './organizations.schema';
+import {
+  getCachedOrganizationAnalytics,
+  cacheOrganizationAnalytics,
+} from '../../utils/redis';
 
 export async function getOrganizations() {
   try {
@@ -130,6 +134,17 @@ export async function getCurrentOrganization(userId: string) {
 export async function getOrganizationAnalytics(organizationId: string) {
   try {
     logger.info(`Fetching analytics for organization ${organizationId}`);
+
+    // First, try to get from cache
+    const cachedData = await getCachedOrganizationAnalytics(organizationId);
+    if (cachedData) {
+      logger.info(`Using cached analytics for organization ${organizationId}`);
+      return cachedData;
+    }
+
+    logger.info(
+      `Analytics for organization ${organizationId} not found in cache, fetching from database...`,
+    );
 
     // Ensure the organization exists
     const organization = await getOrganizationById(organizationId);
@@ -425,24 +440,27 @@ export async function getOrganizationAnalytics(organizationId: string) {
       .groupBy(sql`TO_CHAR(${tickets.bookedAt}, 'YYYY-MM')`)
       .orderBy(sql`TO_CHAR(${tickets.bookedAt}, 'YYYY-MM')`);
 
-    // Return analytics data
-    return {
+    // Format the final response with all the calculated data
+    const analytics = {
       totalEvents: Number(eventCountResult.count),
       totalAttendees: Number(attendeeCountResult.count),
       totalRevenue: Number(revenueResult.revenue) / 100, // Convert from cents to dollars
       ticketsSold: Number(ticketsSoldResult.count),
       periodChanges: {
-        eventsChange: parseFloat(eventsChange.toFixed(1)),
-        attendeesChange: parseFloat(attendeesChange.toFixed(1)),
-        revenueChange: parseFloat(revenueChange.toFixed(1)),
-        ticketsChange: parseFloat(ticketsChange.toFixed(1)),
+        eventsChange: parseFloat(eventsChange.toFixed(2)),
+        attendeesChange: parseFloat(attendeesChange.toFixed(2)),
+        revenueChange: parseFloat(revenueChange.toFixed(2)),
+        ticketsChange: parseFloat(ticketsChange.toFixed(2)),
       },
       recentEvents: recentEvents.map((event) => ({
         ...event,
         ticketsSold: Number(event.ticketsSold),
         revenue: Number(event.revenue) / 100, // Convert from cents to dollars
       })),
-      eventsByCategory,
+      eventsByCategory: eventsByCategory.map((item) => ({
+        category: item.category,
+        count: Number(item.count),
+      })),
       revenueByMonth: revenueByMonth.map((item) => ({
         month: item.month,
         revenue: Number(item.revenue) / 100, // Convert from cents to dollars
@@ -452,11 +470,15 @@ export async function getOrganizationAnalytics(organizationId: string) {
         count: Number(item.count),
       })),
     };
+
+    // Cache the analytics before returning
+    await cacheOrganizationAnalytics(organizationId, analytics);
+
+    return analytics;
   } catch (error) {
-    logger.error(`Error fetching organization analytics: ${error}`);
-    if (error instanceof AppError) {
-      throw error;
-    }
-    throw new AppError(500, 'Failed to fetch organization analytics');
+    logger.error(
+      `Error fetching analytics for organization ${organizationId}: ${error}`,
+    );
+    throw error;
   }
 }

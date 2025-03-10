@@ -29,6 +29,20 @@
       "when": 1740855660499,
       "tag": "0003_shiny_spitfire",
       "breakpoints": false
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1741595705358,
+      "tag": "0004_high_roughhouse",
+      "breakpoints": false
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1741623649673,
+      "tag": "0005_large_ravenous",
+      "breakpoints": false
     }
   ]
 }

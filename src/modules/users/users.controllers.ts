@@ -8,7 +8,7 @@ import {
   resendLoginOTP,
   findUserByEmail,
   createUser,
-  refreshToken
+  refreshToken,
 } from './users.services';
 import {
   loginUserBodySchema,
@@ -18,7 +18,7 @@ import {
   resendOTPBodySchema,
 } from './users.schema';
 import { logger } from '../../utils/logger';
-import { AppError, UnauthorizedError } from '../../utils/errors';
+import { handleError } from '../../utils/errors';
 import { users } from '../../db/schema';
 
 interface AuthenticatedRequest extends FastifyRequest {
@@ -33,11 +33,7 @@ export async function getCurrentUserHandler(
     logger.info(`Getting current user: ${request.user.email}`);
     return reply.code(200).send(request.user);
   } catch (error) {
-    logger.error(`Error getting current user: ${error}`);
-    if (error instanceof AppError) {
-      throw error;
-    }
-    throw new AppError(500, 'Failed to get current user');
+    return handleError(error, request, reply);
   }
 }
 
@@ -51,11 +47,7 @@ export async function registerUserHandler(
     const result = await registerUser(request.body);
     return reply.code(200).send(result);
   } catch (error) {
-    logger.error(`Error registering user in controller: ${error}`);
-    if (error instanceof Error) {
-      return reply.code(400).send({ message: error.message });
-    }
-    return reply.code(500).send({ message: 'Internal server error' });
+    return handleError(error, request, reply);
   }
 }
 
@@ -73,10 +65,7 @@ export async function verifyRegistrationHandler(
     });
     return reply.code(200).send(result);
   } catch (error) {
-    if (error instanceof Error) {
-      return reply.code(400).send({ message: error.message });
-    }
-    return reply.code(500).send({ message: 'Internal server error' });
+    return handleError(error, request, reply);
   }
 }
 
@@ -91,16 +80,14 @@ export async function loginUserHandler(
     const result = await loginUser({
       email,
     });
+
+    // Regular user flow - OTP sent (or bypassed for seeded users)
     return reply.code(200).send({
       message: 'OTP sent',
       data: result,
     });
   } catch (error) {
-    logger.error(`Error logging in user in controller: ${error}`);
-    if (error instanceof Error) {
-      return reply.code(400).send({ message: error.message });
-    }
-    return reply.code(500).send({ message: 'Internal server error' });
+    return handleError(error, request, reply);
   }
 }
 
@@ -121,11 +108,7 @@ export async function verifyLoginHandler(
       data: result,
     });
   } catch (error) {
-    logger.error(`Error verifying login in controller: ${error}`);
-    if (error instanceof Error) {
-      return reply.code(400).send({ message: error.message });
-    }
-    return reply.code(500).send({ message: 'Internal server error' });
+    return handleError(error, request, reply);
   }
 }
 
@@ -145,11 +128,7 @@ export async function resendRegistrationOTPHandler(
       data: result,
     });
   } catch (error) {
-    logger.error(`Error resending registration OTP in controller: ${error}`);
-    if (error instanceof Error) {
-      return reply.code(400).send({ message: error.message });
-    }
-    return reply.code(500).send({ message: 'Internal server error' });
+    return handleError(error, request, reply);
   }
 }
 
@@ -169,11 +148,7 @@ export async function resendLoginOTPHandler(
       data: result,
     });
   } catch (error) {
-    logger.error(`Error resending login OTP in controller: ${error}`);
-    if (error instanceof Error) {
-      return reply.code(400).send({ message: error.message });
-    }
-    return reply.code(500).send({ message: 'Internal server error' });
+    return handleError(error, request, reply);
   }
 }
 
@@ -192,9 +167,6 @@ export async function refreshTokenHandler(
     const result = await refreshToken(refresh_token);
     return reply.code(200).send(result);
   } catch (error) {
-    if (error instanceof UnauthorizedError) {
-      return reply.code(401).send({ message: error.message });
-    }
-    return reply.code(500).send({ message: 'Failed to refresh token' });
+    return handleError(error, request, reply);
   }
 }

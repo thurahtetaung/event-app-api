@@ -27,6 +27,8 @@ import {
   ValidationError,
   ForbiddenError,
 } from '../../utils/errors';
+import { checkOrganizationAccess } from '../organizations/organizations.services';
+import { DatabaseError } from 'pg-protocol/dist';
 
 interface PurchaseTicketsInput {
   eventId: string;
@@ -848,5 +850,249 @@ export async function getTicketAccessToken(
       throw error;
     }
     throw new AppError(500, 'Failed to get ticket access token');
+  }
+}
+
+/**
+ * Gets ticket details without requiring access token verification
+ * This is used for the ticket verification page to display basic info before validation
+ */
+export async function getTicketDetails(eventId: string, ticketId: string) {
+  try {
+    logger.info(`Getting details for ticket ${ticketId} for event ${eventId}`);
+
+    // Get the ticket with its details including user and ticket type info
+    const [ticketData] = await db
+      .select({
+        ticket: {
+          id: tickets.id,
+          status: tickets.status,
+          isValidated: tickets.isValidated,
+          validatedAt: tickets.validatedAt,
+          bookedAt: tickets.updatedAt, // Use updatedAt as bookedAt since that's when it's marked as booked
+          price: tickets.price,
+        },
+        ticketType: {
+          id: ticketTypes.id,
+          name: ticketTypes.name,
+          type: ticketTypes.type,
+        },
+        user: {
+          id: users.id,
+          firstName: users.firstName,
+          lastName: users.lastName,
+          email: users.email,
+        },
+        event: {
+          id: events.id,
+          title: events.title,
+          startTimestamp: events.startTimestamp,
+          endTimestamp: events.endTimestamp,
+          venue: events.venue,
+          address: events.address,
+        },
+      })
+      .from(tickets)
+      .innerJoin(events, eq(tickets.eventId, events.id))
+      .innerJoin(ticketTypes, eq(tickets.ticketTypeId, ticketTypes.id))
+      .innerJoin(users, eq(tickets.userId, users.id))
+      .where(
+        and(
+          eq(tickets.id, ticketId),
+          eq(tickets.eventId, eventId),
+          eq(tickets.status, 'booked'),
+        ),
+      )
+      .limit(1);
+
+    if (!ticketData) {
+      throw new NotFoundError('Ticket not found');
+    }
+
+    return {
+      success: true,
+      ticket: {
+        ...ticketData.ticket,
+        ticketType: ticketData.ticketType,
+        user: ticketData.user,
+        event: ticketData.event,
+      },
+    };
+  } catch (error) {
+    logger.error(`Error getting ticket details: ${error}`);
+    if (error instanceof DatabaseError && error.code === '22P02') {
+      throw new ValidationError('Invalid ticket ID');
+    }
+    throw error;
+  }
+}
+
+/**
+ * Verifies a ticket using its access token and returns ticket details
+ */
+export async function verifyTicketWithAccessToken(
+  eventId: string,
+  ticketId: string,
+  accessToken: string,
+) {
+  try {
+    logger.info(
+      `Verifying ticket ${ticketId} for event ${eventId} with access token`,
+    );
+
+    // Get the ticket with its details including user and ticket type info
+    const [ticketData] = await db
+      .select({
+        ticket: {
+          id: tickets.id,
+          status: tickets.status,
+          isValidated: tickets.isValidated,
+          validatedAt: tickets.validatedAt,
+          accessToken: tickets.accessToken,
+        },
+        ticketType: {
+          id: ticketTypes.id,
+          name: ticketTypes.name,
+          type: ticketTypes.type,
+        },
+        user: {
+          id: users.id,
+          firstName: users.firstName,
+          lastName: users.lastName,
+          email: users.email,
+        },
+        event: {
+          id: events.id,
+          title: events.title,
+          organizationId: events.organizationId,
+        },
+      })
+      .from(tickets)
+      .innerJoin(events, eq(tickets.eventId, events.id))
+      .innerJoin(ticketTypes, eq(tickets.ticketTypeId, ticketTypes.id))
+      .innerJoin(users, eq(tickets.userId, users.id))
+      .where(
+        and(
+          eq(tickets.id, ticketId),
+          eq(tickets.eventId, eventId),
+          eq(tickets.status, 'booked'),
+        ),
+      )
+      .limit(1);
+
+    if (!ticketData) {
+      throw new NotFoundError('Ticket not found');
+    }
+
+    // Verify access token
+    if (ticketData.ticket.accessToken !== accessToken) {
+      throw new ForbiddenError('Invalid access token');
+    }
+
+    // Return ticket details without the access token for security
+    const { accessToken: _, ...ticketDetails } = ticketData.ticket;
+
+    return {
+      success: true,
+      ticket: {
+        ...ticketDetails,
+        ticketType: ticketData.ticketType,
+        user: ticketData.user,
+        event: ticketData.event,
+      },
+    };
+  } catch (error) {
+    logger.error(`Error verifying ticket: ${error}`);
+    throw error;
+  }
+}
+
+/**
+ * Validates a ticket by marking it as validated and updating relevant fields
+ */
+export async function validateTicket(
+  organizerId: string,
+  eventId: string,
+  ticketId: string,
+  accessToken: string,
+) {
+  try {
+    logger.info(`Validating ticket ${ticketId} for event ${eventId}`);
+
+    // First verify the ticket and access token
+    let ticketData;
+    try {
+      ticketData = await verifyTicketWithAccessToken(
+        eventId,
+        ticketId,
+        accessToken,
+      );
+    } catch (error) {
+      logger.error(`Error in verifyTicketWithAccessToken: ${error}`);
+      // Make sure to re-throw NotFoundError and ForbiddenError
+      throw error;
+    }
+
+    // Check if ticket is already validated
+    if (ticketData.ticket.isValidated) {
+      return {
+        success: true,
+        message: 'Ticket has already been validated',
+        ticket: {
+          id: ticketData.ticket.id,
+          isValidated: ticketData.ticket.isValidated,
+          validatedAt: ticketData.ticket.validatedAt,
+        },
+      };
+    }
+
+    // Check if user has access to the organization that owns the event
+    try {
+      await checkOrganizationAccess(
+        organizerId,
+        ticketData.ticket.event.organizationId,
+      );
+    } catch (error) {
+      logger.error(
+        `Organization access check failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      );
+      // Specifically check for and re-throw ForbiddenError
+      if (error instanceof ForbiddenError) {
+        throw new ForbiddenError(
+          `You don't have permission to validate tickets for this event: ${error.message}`,
+        );
+      }
+      if (error instanceof NotFoundError) {
+        throw error;
+      }
+      throw new AppError(
+        500,
+        `Organization access check failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      );
+    }
+
+    // Update ticket status to validated and generate access token
+    await db
+      .update(tickets)
+      .set({
+        status: 'booked',
+        isValidated: true,
+        validatedAt: new Date(),
+        accessToken: sql`uuid_generate_v4()`,
+      })
+      .where(eq(tickets.id, ticketId));
+
+    return {
+      success: true,
+      message: 'Ticket validated successfully',
+      ticket: {
+        id: ticketData.ticket.id,
+        isValidated: ticketData.ticket.isValidated,
+        validatedAt: ticketData.ticket.validatedAt,
+      },
+    };
+  } catch (error) {
+    logger.error(`Error validating ticket: ${error}`);
+    throw error;
   }
 }

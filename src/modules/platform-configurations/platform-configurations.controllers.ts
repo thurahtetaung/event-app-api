@@ -12,6 +12,7 @@ import {
   UpdatePlatformConfigInput,
 } from './platform-configurations.schema';
 import { platformConfigurationsEnum } from '../../db/schema';
+import { handleError } from '../../utils/errors';
 
 export async function createPlatformConfigHandler(
   request: FastifyRequest<{
@@ -23,10 +24,7 @@ export async function createPlatformConfigHandler(
     const config = await createPlatformConfig(request.body);
     return reply.code(201).send(config);
   } catch (error) {
-    if (error instanceof Error) {
-      return reply.code(400).send({ message: error.message });
-    }
-    return reply.code(500).send({ message: 'Internal server error' });
+    return handleError(error, request, reply);
   }
 }
 
@@ -43,10 +41,7 @@ export async function updatePlatformConfigHandler(
     const config = await updatePlatformConfig(request.params.key, request.body);
     return reply.code(200).send(config);
   } catch (error) {
-    if (error instanceof Error) {
-      return reply.code(400).send({ message: error.message });
-    }
-    return reply.code(500).send({ message: 'Internal server error' });
+    return handleError(error, request, reply);
   }
 }
 
@@ -58,10 +53,7 @@ export async function getPlatformConfigsHandler(
     const configs = await getPlatformConfigs();
     return reply.code(200).send(configs);
   } catch (error) {
-    if (error instanceof Error) {
-      return reply.code(400).send({ message: error.message });
-    }
-    return reply.code(500).send({ message: 'Internal server error' });
+    return handleError(error, request, reply);
   }
 }
 
@@ -78,10 +70,7 @@ export async function getPlatformConfigByKeyHandler(
     }
     return reply.code(200).send(config);
   } catch (error) {
-    if (error instanceof Error) {
-      return reply.code(400).send({ message: error.message });
-    }
-    return reply.code(500).send({ message: 'Internal server error' });
+    return handleError(error, request, reply);
   }
 }
 
@@ -97,9 +86,6 @@ export async function deletePlatformConfigHandler(
     const config = await deletePlatformConfig(request.params.key);
     return reply.code(200).send(config);
   } catch (error) {
-    if (error instanceof Error) {
-      return reply.code(400).send({ message: error.message });
-    }
-    return reply.code(500).send({ message: 'Internal server error' });
+    return handleError(error, request, reply);
   }
 }

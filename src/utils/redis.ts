@@ -47,6 +47,22 @@ redisClient
 const TICKET_PREFIX = 'ticket:';
 const LOCK_DURATION = env.REDIS_TICKET_LOCK_DURATION;
 
+// Cache prefixes and TTLs for admin statistics
+const ADMIN_STATS_PREFIX = 'admin:stats:';
+const ADMIN_REVENUE_PREFIX = 'admin:revenue:';
+const ADMIN_USER_GROWTH_PREFIX = 'admin:user_growth:';
+const ADMIN_EVENT_STATS_PREFIX = 'admin:event_stats:';
+
+// TTL values (in seconds)
+const DASHBOARD_STATS_TTL = 60 * 15; // 15 minutes
+const REVENUE_DATA_TTL = 60 * 60; // 1 hour
+const USER_GROWTH_TTL = 60 * 60; // 1 hour
+const EVENT_STATS_TTL = 60 * 60; // 1 hour
+
+// Organization analytics cache
+const ORG_ANALYTICS_PREFIX = 'org:analytics:';
+const ORG_ANALYTICS_TTL = 60 * 15; // 15 minutes
+
 export async function reserveTicket(
   ticketId: string,
   userId: string,
@@ -189,6 +205,183 @@ export async function releaseUserTickets(userId: string): Promise<void> {
     );
   } catch (error) {
     logger.error(`Error releasing user tickets for ${userId}:`, error);
+  }
+}
+
+/**
+ * Cache dashboard statistics
+ */
+export async function cacheDashboardStats(data: any): Promise<void> {
+  try {
+    const key = ADMIN_STATS_PREFIX + 'dashboard';
+    await redisClient.set(key, JSON.stringify(data));
+    await redisClient.expire(key, DASHBOARD_STATS_TTL);
+    logger.debug(`Cached dashboard stats with TTL ${DASHBOARD_STATS_TTL}s`);
+  } catch (error) {
+    logger.error(`Error caching dashboard stats: ${error}`);
+  }
+}
+
+/**
+ * Get cached dashboard statistics
+ */
+export async function getCachedDashboardStats(): Promise<any | null> {
+  try {
+    const key = ADMIN_STATS_PREFIX + 'dashboard';
+    const data = await redisClient.get(key);
+    if (data) {
+      logger.debug('Retrieved dashboard stats from cache');
+      return JSON.parse(data);
+    }
+    return null;
+  } catch (error) {
+    logger.error(`Error retrieving cached dashboard stats: ${error}`);
+    return null;
+  }
+}
+
+/**
+ * Cache monthly revenue data
+ */
+export async function cacheMonthlyRevenueData(data: any): Promise<void> {
+  try {
+    const key = ADMIN_REVENUE_PREFIX + 'monthly';
+    await redisClient.set(key, JSON.stringify(data));
+    await redisClient.expire(key, REVENUE_DATA_TTL);
+    logger.debug(`Cached monthly revenue data with TTL ${REVENUE_DATA_TTL}s`);
+  } catch (error) {
+    logger.error(`Error caching monthly revenue data: ${error}`);
+  }
+}
+
+/**
+ * Get cached monthly revenue data
+ */
+export async function getCachedMonthlyRevenueData(): Promise<any | null> {
+  try {
+    const key = ADMIN_REVENUE_PREFIX + 'monthly';
+    const data = await redisClient.get(key);
+    if (data) {
+      logger.debug('Retrieved monthly revenue data from cache');
+      return JSON.parse(data);
+    }
+    return null;
+  } catch (error) {
+    logger.error(`Error retrieving cached monthly revenue data: ${error}`);
+    return null;
+  }
+}
+
+/**
+ * Cache user growth data
+ */
+export async function cacheUserGrowthData(data: any): Promise<void> {
+  try {
+    const key = ADMIN_USER_GROWTH_PREFIX + 'yearly';
+    await redisClient.set(key, JSON.stringify(data));
+    await redisClient.expire(key, USER_GROWTH_TTL);
+    logger.debug(`Cached user growth data with TTL ${USER_GROWTH_TTL}s`);
+  } catch (error) {
+    logger.error(`Error caching user growth data: ${error}`);
+  }
+}
+
+/**
+ * Get cached user growth data
+ */
+export async function getCachedUserGrowthData(): Promise<any | null> {
+  try {
+    const key = ADMIN_USER_GROWTH_PREFIX + 'yearly';
+    const data = await redisClient.get(key);
+    if (data) {
+      logger.debug('Retrieved user growth data from cache');
+      return JSON.parse(data);
+    }
+    return null;
+  } catch (error) {
+    logger.error(`Error retrieving cached user growth data: ${error}`);
+    return null;
+  }
+}
+
+/**
+ * Cache event statistics
+ */
+export async function cacheEventStatistics(data: any): Promise<void> {
+  try {
+    const key = ADMIN_EVENT_STATS_PREFIX + 'yearly';
+    await redisClient.set(key, JSON.stringify(data));
+    await redisClient.expire(key, EVENT_STATS_TTL);
+    logger.debug(`Cached event statistics with TTL ${EVENT_STATS_TTL}s`);
+  } catch (error) {
+    logger.error(`Error caching event statistics: ${error}`);
+  }
+}
+
+/**
+ * Get cached event statistics
+ */
+export async function getCachedEventStatistics(): Promise<any | null> {
+  try {
+    const key = ADMIN_EVENT_STATS_PREFIX + 'yearly';
+    const data = await redisClient.get(key);
+    if (data) {
+      logger.debug('Retrieved event statistics from cache');
+      return JSON.parse(data);
+    }
+    return null;
+  } catch (error) {
+    logger.error(`Error retrieving cached event statistics: ${error}`);
+    return null;
+  }
+}
+
+/**
+ * Cache organization analytics data
+ * @param organizationId The organization ID
+ * @param data The analytics data to cache
+ */
+export async function cacheOrganizationAnalytics(
+  organizationId: string,
+  data: any,
+): Promise<void> {
+  try {
+    const key = `${ORG_ANALYTICS_PREFIX}${organizationId}`;
+    await redisClient.set(key, JSON.stringify(data));
+    await redisClient.expire(key, ORG_ANALYTICS_TTL);
+    logger.debug(
+      `Cached analytics for organization ${organizationId} with TTL ${ORG_ANALYTICS_TTL}s`,
+    );
+  } catch (error) {
+    logger.error(
+      `Error caching analytics for organization ${organizationId}: ${error}`,
+    );
+  }
+}
+
+/**
+ * Get cached organization analytics data
+ * @param organizationId The organization ID
+ * @returns The cached analytics data or null if not found
+ */
+export async function getCachedOrganizationAnalytics(
+  organizationId: string,
+): Promise<any | null> {
+  try {
+    const key = `${ORG_ANALYTICS_PREFIX}${organizationId}`;
+    const data = await redisClient.get(key);
+    if (data) {
+      logger.debug(
+        `Retrieved cached analytics for organization ${organizationId}`,
+      );
+      return JSON.parse(data);
+    }
+    return null;
+  } catch (error) {
+    logger.error(
+      `Error retrieving cached analytics for organization ${organizationId}: ${error}`,
+    );
+    return null;
   }
 }
 

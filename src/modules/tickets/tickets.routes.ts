@@ -8,16 +8,40 @@ import {
   reserveTicketsHandler,
   getTicketAccessTokenHandler,
   releaseReservationsHandler,
+  verifyTicketHandler,
+  validateTicketHandler,
+  getTicketDetailsHandler,
 } from './tickets.controllers';
 import {
   createTicketsJSONSchema,
   updateTicketStatusSchema,
   updateTicketStatusJSONSchema,
   getTicketAccessTokenJSONSchema,
+  validateTicketJSONSchema,
+  completeTicketValidationJSONSchema,
+  getTicketDetailsJSONSchema,
 } from './tickets.schema';
 import { authenticateRequest } from '../../middleware/auth';
 
 export async function ticketRoutes(app: FastifyInstance) {
+  // Publicly accessible routes (no authentication required)
+  app.get(
+    '/events/:eventId/validate/:ticketId',
+    {
+      schema: validateTicketJSONSchema,
+    },
+    verifyTicketHandler,
+  );
+
+  // New endpoint to get ticket details (publicly accessible too)
+  app.get(
+    '/events/:eventId/tickets/:ticketId/details',
+    {
+      schema: getTicketDetailsJSONSchema,
+    },
+    getTicketDetailsHandler,
+  );
+
   app.register(async function (app) {
     app.addHook('onRequest', authenticateRequest);
 
@@ -136,6 +160,15 @@ export async function ticketRoutes(app: FastifyInstance) {
         schema: getTicketAccessTokenJSONSchema,
       },
       getTicketAccessTokenHandler,
+    );
+
+    // Complete ticket validation (for organizers)
+    app.post(
+      '/events/:eventId/validate/:ticketId',
+      {
+        schema: completeTicketValidationJSONSchema,
+      },
+      validateTicketHandler,
     );
 
     // Release all reserved tickets for the current user

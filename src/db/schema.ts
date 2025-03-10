@@ -34,6 +34,12 @@ export const eventTypesEnum = pgEnum('event_types', [
   'corporate',
 ]);
 
+export const userStatusEnum = pgEnum('user_status', [
+  'active',
+  'inactive',
+  'banned',
+]);
+
 export const users = pgTable(
   'users',
   {
@@ -45,6 +51,7 @@ export const users = pgTable(
     country: text('country').notNull(),
     supabaseUserId: text('supabase_user_id').unique(),
     role: userRolesEnum('role').notNull().default('user'),
+    status: userStatusEnum('status').notNull().default('active'),
     verified: boolean('verified').notNull().default(false),
     createdAt: timestamp('created_at').defaultNow(),
     updatedAt: timestamp('updated_at').defaultNow(),
@@ -279,4 +286,18 @@ export const organizerApplications = pgTable('organizer_applications', {
   approvedAt: timestamp('approved_at'),
   createdAt: timestamp('created_at').defaultNow(),
   updatedAt: timestamp('updated_at').defaultNow(),
+});
+
+// Seeding audit table to track and manage seeding operations
+export const seedingAudit = pgTable('seeding_audit', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  batchId: uuid('batch_id').notNull(), // Group related seeding operations
+  operation: text('operation').notNull(), // e.g., 'SEED', 'ROLLBACK'
+  entityType: text('entity_type').notNull(), // e.g., 'users', 'events'
+  entityIds: text('entity_ids').notNull(), // JSON array of created IDs
+  metadata: text('metadata'), // Additional info like counts, parameters used
+  status: text('status').notNull(), // 'SUCCESS', 'FAILED', 'ROLLED_BACK'
+  errorMessage: text('error_message'),
+  createdAt: timestamp('created_at').defaultNow(),
+  createdBy: text('created_by'), // Script or user identifier
 });
