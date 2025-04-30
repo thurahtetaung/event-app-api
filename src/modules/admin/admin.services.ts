@@ -1,4 +1,4 @@
-import { eq, inArray } from 'drizzle-orm';
+import { eq, inArray, and, gte, lte } from 'drizzle-orm';
 import { db } from '../../db';
 import {
   users,
@@ -414,16 +414,16 @@ export async function getDashboardStats() {
     // Get date ranges for current month and previous month
     const now = new Date();
 
-    // Current month (last 30 days)
-    const currentMonthStart = new Date(now);
-    currentMonthStart.setMonth(now.getMonth() - 1);
+    // Get the current calendar month (1st day of current month to today)
+    const currentMonthStart = new Date(now.getFullYear(), now.getMonth(), 1); // 1st day of current month
 
-    // Previous month (30-60 days ago)
-    const previousMonthStart = new Date(currentMonthStart);
-    previousMonthStart.setMonth(previousMonthStart.getMonth() - 1);
-
-    const previousMonthEnd = new Date(currentMonthStart);
-    previousMonthEnd.setDate(previousMonthEnd.getDate() - 1);
+    // Get previous calendar month (1st day to last day of previous month)
+    const previousMonthStart = new Date(
+      now.getFullYear(),
+      now.getMonth() - 1,
+      1,
+    ); // 1st day of previous month
+    const previousMonthEnd = new Date(now.getFullYear(), now.getMonth(), 0); // Last day of previous month
 
     // Count users who registered in the last month
     const newUsers = allUsers.filter(
@@ -482,39 +482,45 @@ export async function getDashboardStats() {
     let currentMonthSales = 0;
     let previousMonthSales = 0;
 
+    // Use a Map to ensure we count each ticket only once
+    const uniqueTickets = new Map();
+
     if (completedOrders.length > 0) {
-      // Get all order items with tickets for completed orders
+      // Process order IDs in batches to avoid exceeding parameter limits
       const orderIds = completedOrders.map((order) => order.id);
+      const BATCH_SIZE = 1000; // Process 1000 orders at a time
 
-      const orderItemsWithTickets = await db
-        .select({
-          orderItem: orderItems,
-          ticket: tickets,
-          order: orders,
-        })
-        .from(orderItems)
-        .leftJoin(tickets, eq(orderItems.ticketId, tickets.id))
-        .leftJoin(orders, eq(orderItems.orderId, orders.id))
-        .where(inArray(orderItems.orderId, orderIds));
+      for (let i = 0; i < orderIds.length; i += BATCH_SIZE) {
+        const batchOrderIds = orderIds.slice(i, i + BATCH_SIZE);
 
-      // Use a Map to ensure we count each ticket only once
-      const uniqueTickets = new Map();
+        // Get order items with tickets for this batch of orders
+        const orderItemsWithTickets = await db
+          .select({
+            orderItem: orderItems,
+            ticket: tickets,
+            order: orders,
+          })
+          .from(orderItems)
+          .leftJoin(tickets, eq(orderItems.ticketId, tickets.id))
+          .leftJoin(orders, eq(orderItems.orderId, orders.id))
+          .where(inArray(orderItems.orderId, batchOrderIds));
 
-      // Process each ticket, ensuring we only count each one once
-      orderItemsWithTickets.forEach((item) => {
-        if (
-          item.ticket &&
-          item.ticket.id &&
-          !uniqueTickets.has(item.ticket.id) &&
-          item.order
-        ) {
-          // Store the order creation date with the ticket for time-based filtering
-          uniqueTickets.set(item.ticket.id, {
-            ...item.ticket,
-            orderCreatedAt: item.order.createdAt,
-          });
-        }
-      });
+        // Process each ticket in this batch
+        orderItemsWithTickets.forEach((item) => {
+          if (
+            item.ticket &&
+            item.ticket.id &&
+            !uniqueTickets.has(item.ticket.id) &&
+            item.order
+          ) {
+            // Store the order creation date with the ticket for time-based filtering
+            uniqueTickets.set(item.ticket.id, {
+              ...item.ticket,
+              orderCreatedAt: item.order.createdAt,
+            });
+          }
+        });
+      }
 
       // Calculate total sales from all tickets
       totalSales = Array.from(uniqueTickets.values()).reduce(
@@ -589,7 +595,10 @@ export async function getDashboardStats() {
       },
       revenue: {
         total: parseFloat(totalRevenue.toFixed(2)),
-        growthRate: parseFloat(revenueGrowthRate.toFixed(2)),
+        growthRate:
+          revenueGrowthRate > 0
+            ? `+${revenueGrowthRate.toFixed(2)}`
+            : `${revenueGrowthRate.toFixed(2)}`,
         newSinceLastMonth: parseFloat(currentMonthRevenue.toFixed(2)),
       },
       platformFee: {
@@ -670,43 +679,50 @@ export async function getMonthlyRevenueData() {
     const orderIds = completedOrders.map((order) => order.id);
 
     if (orderIds.length > 0) {
-      // Get all order items and related tickets
-      const orderItemsWithTickets = await db
-        .select({
-          orderItem: orderItems,
-          ticket: tickets,
-          order: orders,
-        })
-        .from(orderItems)
-        .leftJoin(tickets, eq(orderItems.ticketId, tickets.id))
-        .leftJoin(orders, eq(orderItems.orderId, orders.id))
-        .where(inArray(orderItems.orderId, orderIds));
+      // Process order IDs in batches to avoid exceeding parameter limits
+      const BATCH_SIZE = 1000; // Process 1000 orders at a time
 
-      // Process each order item
-      orderItemsWithTickets.forEach((item) => {
-        if (item.order && item.order.createdAt && item.ticket) {
-          const orderDate = new Date(item.order.createdAt);
+      for (let i = 0; i < orderIds.length; i += BATCH_SIZE) {
+        const batchOrderIds = orderIds.slice(i, i + BATCH_SIZE);
 
-          // Only include orders from the last 12 months
-          if (orderDate >= startDate && orderDate <= currentDate) {
-            // Calculate which month bucket this belongs to
-            const monthDiff =
-              (orderDate.getFullYear() - startDate.getFullYear()) * 12 +
-              (orderDate.getMonth() - startDate.getMonth());
+        // Get all order items and related tickets for this batch
+        const orderItemsWithTickets = await db
+          .select({
+            orderItem: orderItems,
+            ticket: tickets,
+            order: orders,
+          })
+          .from(orderItems)
+          .leftJoin(tickets, eq(orderItems.ticketId, tickets.id))
+          .leftJoin(orders, eq(orderItems.orderId, orders.id))
+          .where(inArray(orderItems.orderId, batchOrderIds));
 
-            if (monthDiff >= 0 && monthDiff < 12) {
-              // Add ticket price to total sales for this month
-              const ticketPrice = item.ticket.price || 0;
-              monthlyRevenue[monthDiff].totalSales += ticketPrice / 100; // Convert cents to dollars
-              monthlyRevenue[monthDiff].ticketsSold += 1;
+        // Process each order item in this batch
+        orderItemsWithTickets.forEach((item) => {
+          if (item.order && item.order.createdAt && item.ticket) {
+            const orderDate = new Date(item.order.createdAt);
 
-              // Calculate platform revenue
-              monthlyRevenue[monthDiff].revenue +=
-                (ticketPrice / 100) * (platformFeePercentage / 100);
+            // Only include orders from the last 12 months
+            if (orderDate >= startDate && orderDate <= currentDate) {
+              // Calculate which month bucket this belongs to
+              const monthDiff =
+                (orderDate.getFullYear() - startDate.getFullYear()) * 12 +
+                (orderDate.getMonth() - startDate.getMonth());
+
+              if (monthDiff >= 0 && monthDiff < 12) {
+                // Add ticket price to total sales for this month
+                const ticketPrice = item.ticket.price || 0;
+                monthlyRevenue[monthDiff].totalSales += ticketPrice / 100; // Convert cents to dollars
+                monthlyRevenue[monthDiff].ticketsSold += 1;
+
+                // Calculate platform revenue
+                monthlyRevenue[monthDiff].revenue +=
+                  (ticketPrice / 100) * (platformFeePercentage / 100);
+              }
             }
           }
-        }
-      });
+        });
+      }
     }
 
     // Round values to 2 decimal places
@@ -846,91 +862,125 @@ export async function getEventStatistics() {
       };
     });
 
-    // ========= EVENTS COUNT BY MONTH =========
-    const allEvents = await db.select().from(events);
+    // ========= EVENTS COUNT BY MONTH - OPTIMIZED =========
+    // Filter at the database level instead of fetching all events
+    const eventsInPeriod = await db
+      .select({
+        id: events.id,
+        createdAt: events.createdAt,
+        capacity: events.capacity,
+      })
+      .from(events)
+      .where(
+        and(
+          gte(events.createdAt, startDate),
+          lte(events.createdAt, currentDate),
+        ),
+      );
 
-    // Process each event to count new events per month
-    allEvents.forEach((event) => {
+    // Process events to count by month
+    const eventsByMonth = new Map<
+      number,
+      { count: number; capacitySum: number }
+    >();
+    for (let i = 0; i < 12; i++) {
+      eventsByMonth.set(i, { count: 0, capacitySum: 0 });
+    }
+
+    eventsInPeriod.forEach((event) => {
       if (event.createdAt) {
         const creationDate = new Date(event.createdAt);
+        const monthDiff =
+          (creationDate.getFullYear() - startDate.getFullYear()) * 12 +
+          (creationDate.getMonth() - startDate.getMonth());
 
-        // Only include events from the last 12 months
-        if (creationDate >= startDate && creationDate <= currentDate) {
-          // Calculate which month bucket this belongs to
-          const monthDiff =
-            (creationDate.getFullYear() - startDate.getFullYear()) * 12 +
-            (creationDate.getMonth() - startDate.getMonth());
-
-          if (monthDiff >= 0 && monthDiff < 12) {
-            monthlyStats[monthDiff].newEvents += 1;
+        if (monthDiff >= 0 && monthDiff < 12) {
+          const monthData = eventsByMonth.get(monthDiff);
+          if (monthData) {
+            monthData.count += 1;
+            monthData.capacitySum += event.capacity || 0;
+            eventsByMonth.set(monthDiff, monthData);
           }
         }
       }
     });
 
-    // ========= TICKETS SOLD BY MONTH =========
-    // Get all completed orders
-    const completedOrders = await db
+    // Update the monthly stats with event counts
+    for (let i = 0; i < 12; i++) {
+      const monthData = eventsByMonth.get(i);
+      if (monthData) {
+        monthlyStats[i].newEvents = monthData.count;
+      }
+    }
+
+    // ========= TICKETS SOLD BY MONTH - OPTIMIZED =========
+    // First get all order IDs for completed orders in the time period
+    const completedOrdersInPeriod = await db
       .select({
         id: orders.id,
         createdAt: orders.createdAt,
-        eventId: orders.eventId,
       })
       .from(orders)
-      .where(eq(orders.status, 'completed'));
+      .where(
+        and(
+          eq(orders.status, 'completed'),
+          gte(orders.createdAt, startDate),
+          lte(orders.createdAt, currentDate),
+        ),
+      );
 
-    // Create a map to track tickets per month
-    const ticketsByMonth = new Map<number, number>();
-    for (let i = 0; i < 12; i++) {
-      ticketsByMonth.set(i, 0);
-    }
+    // If we have orders, get all their items in a single batch query
+    if (completedOrdersInPeriod.length > 0) {
+      const orderIds = completedOrdersInPeriod.map((order) => order.id);
 
-    // Count order items for each month
-    for (const order of completedOrders) {
-      if (order.createdAt) {
-        const orderDate = new Date(order.createdAt);
+      // Get all order items for these orders in a single query
+      const allOrderItems = await db
+        .select({
+          orderId: orderItems.orderId,
+          ticketId: orderItems.ticketId,
+          createdAt: orders.createdAt,
+        })
+        .from(orderItems)
+        .leftJoin(orders, eq(orderItems.orderId, orders.id))
+        .where(inArray(orderItems.orderId, orderIds));
 
-        // Only include orders from the last 12 months
-        if (orderDate >= startDate && orderDate <= currentDate) {
-          // Calculate which month bucket this belongs to
+      // Process all order items
+      for (const item of allOrderItems) {
+        if (item.createdAt) {
+          const orderDate = new Date(item.createdAt);
           const monthDiff =
             (orderDate.getFullYear() - startDate.getFullYear()) * 12 +
             (orderDate.getMonth() - startDate.getMonth());
 
           if (monthDiff >= 0 && monthDiff < 12) {
-            // Count the number of ticket items for this order
-            const items = await db
-              .select()
-              .from(orderItems)
-              .where(eq(orderItems.orderId, order.id));
-
-            // Add to the month's ticket count
-            ticketsByMonth.set(
-              monthDiff,
-              (ticketsByMonth.get(monthDiff) || 0) + items.length,
-            );
+            monthlyStats[monthDiff].ticketsSold += 1;
           }
         }
       }
     }
 
-    // ========= CALCULATE METRICS =========
+    // ========= CALCULATE METRICS - IMPROVED =========
     // Now calculate our derived metrics for each month
     for (let i = 0; i < 12; i++) {
-      monthlyStats[i].ticketsSold = ticketsByMonth.get(i) || 0;
-
-      // If we have events in this month, calculate the average
+      // If we have events in this month, calculate the average tickets per event
       if (monthlyStats[i].newEvents > 0) {
         monthlyStats[i].averageTicketsPerEvent = Math.round(
           monthlyStats[i].ticketsSold / monthlyStats[i].newEvents,
         );
-      } else {
-        // Default value if there are no events
-        monthlyStats[i].averageTicketsPerEvent = 0;
-      }
 
-      // Generate occupancy rate - using random values between 40-70%
-      monthlyStats[i].eventOccupancyRate = Math.floor(Math.random() * 30) + 40;
+        // Calculate real occupancy rate based on capacity
+        const monthData = eventsByMonth.get(i);
+        if (monthData && monthData.capacitySum > 0) {
+          monthlyStats[i].eventOccupancyRate = Math.round(
+            (monthlyStats[i].ticketsSold / monthData.capacitySum) * 100,
+          );
+        } else {
+          monthlyStats[i].eventOccupancyRate = 0;
+        }
+      } else {
+        monthlyStats[i].averageTicketsPerEvent = 0;
+        monthlyStats[i].eventOccupancyRate = 0;
+      }
     }
 
     // Cache the data before returning

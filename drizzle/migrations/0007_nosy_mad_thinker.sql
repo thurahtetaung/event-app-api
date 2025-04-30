@@ -1,0 +1,1 @@
+ALTER TABLE "organizations" DROP CONSTRAINT "organizations_stripe_account_id_unique";

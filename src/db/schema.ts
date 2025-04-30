@@ -104,6 +104,7 @@ export const events = pgTable(
     index().on(events.organizationId),
     index().on(events.status),
     index().on(events.categoryId),
+    index().on(events.createdAt), // Add index for createdAt timestamps
   ],
 );
 
@@ -227,6 +228,8 @@ export const orders = pgTable(
     // Add index for userId, eventId
     index().on(orders.userId),
     index().on(orders.eventId),
+    index().on(orders.createdAt), // Add index for createdAt timestamps
+    index().on(orders.status), // Add index for status filtering
   ],
 );
 

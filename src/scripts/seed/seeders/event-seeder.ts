@@ -207,10 +207,10 @@ export class EventSeeder extends BaseSeeder {
         );
         break;
       case 'future':
-        // Future event in the next 1-12 months
+        // Future event in the next 1-6 months (changed from 12 months)
         startDate = this.generateRandomDate(
           addDays(now, 2), // At least 2 days from now
-          addMonths(now, 12), // Up to 12 months in the future
+          addMonths(now, 6), // Up to 6 months in the future (changed from 12)
         );
         break;
     }

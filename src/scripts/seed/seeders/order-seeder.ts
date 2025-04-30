@@ -67,7 +67,7 @@ export class OrderSeeder extends BaseSeeder {
     }[] = [];
 
     // Set a target number of orders to generate
-    const targetOrderCount = 75000; // Target 75,000 orders
+    const targetOrderCount = 100000; // Target 100,000 orders
 
     console.log(
       `Targeting a total of ${targetOrderCount} orders across all users`,
@@ -597,14 +597,29 @@ export class OrderSeeder extends BaseSeeder {
   private generateOrderTimestamp(event: Event): Date {
     // Orders should be created before the event
     const eventDate = new Date(event.startTimestamp);
+    const today = new Date();
 
     // Most orders are created in the month before the event
     const earliestDate = new Date(eventDate);
     earliestDate.setMonth(earliestDate.getMonth() - 3); // Up to 3 months before
 
     // But some last-minute orders happen close to the event
-    const latestDate = new Date(eventDate);
+    let latestDate = new Date(eventDate);
     latestDate.setDate(latestDate.getDate() - 1); // Up to 1 day before
+
+    // Ensure order date is not in the future (maximum is today)
+    if (latestDate > today) {
+      latestDate = today;
+    }
+
+    // If the earliest date is also in the future, use today's date minus a random number of days
+    if (earliestDate > today) {
+      // Use a date between 1-30 days ago
+      const randomDays = this.generateRandomNumber(1, 30);
+      const pastDate = new Date(today);
+      pastDate.setDate(pastDate.getDate() - randomDays);
+      return pastDate;
+    }
 
     return this.generateRandomDate(earliestDate, latestDate);
   }
