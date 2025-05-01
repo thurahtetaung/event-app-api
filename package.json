@@ -30,7 +30,7 @@
     "zod-to-json-schema": "^3.24.1"
   },
   "scripts": {
-    "start": "node build/src/main.js",
+    "start": "node build/main.js",
     "dev": "tsx watch src/main.ts",
     "migration:generate": "drizzle-kit generate",
     "clean": "rimraf coverage build tmp",
