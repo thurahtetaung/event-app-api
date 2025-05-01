@@ -119,6 +119,8 @@ export const eventStatisticsSchema = z.array(
     year: z.number(),
     newEvents: z.number(),
     ticketsSold: z.number(),
+    averageTicketsPerEvent: z.number(), // Added
+    eventOccupancyRate: z.number(), // Added
   }),
 );
 

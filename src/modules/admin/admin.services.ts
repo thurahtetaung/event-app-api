@@ -1,12 +1,10 @@
-import { eq, inArray, and, gte, lte } from 'drizzle-orm';
+import { eq, inArray, and, gte, lte, count, sql } from 'drizzle-orm';
 import { db } from '../../db';
 import {
   users,
-  organizations,
   events,
   tickets,
   ticketTypes,
-  organizerApplications,
   platformConfigurations,
   orders,
   orderItems,
@@ -24,8 +22,101 @@ import {
   cacheEventStatistics,
 } from '../../utils/redis';
 
+// Use inferred types from schema
+type User = typeof users.$inferSelect;
+type Event = typeof events.$inferSelect;
+type Ticket = typeof tickets.$inferSelect;
+type TicketType = typeof ticketTypes.$inferSelect;
+type Order = typeof orders.$inferSelect;
+type OrderItem = typeof orderItems.$inferSelect;
+type PlatformConfiguration = typeof platformConfigurations.$inferSelect;
+
+// Define interfaces for function return types
+interface UserStats {
+  totalSpent: number;
+  eventsAttended: number;
+  eventsUpcoming: number;
+  eventsCancelled: number;
+}
+
+interface UserEventTicketTypeInfo {
+  id: string;
+  name: string;
+  count: number;
+  price: number;
+}
+
+interface UserEvent {
+  id: string;
+  title: string;
+  startTimestamp: string;
+  status: string;
+  totalTickets: number;
+  ticketTypes: UserEventTicketTypeInfo[];
+}
+
+interface UserTransaction {
+  id: string;
+  eventTitle: string;
+  amount: number;
+  createdAt: string;
+  status: string;
+}
+
+interface MonthlyUserStat {
+  month: string;
+  total: number;
+}
+
+interface DashboardStats {
+  users: {
+    total: number;
+    growthRate: number;
+    newSinceLastMonth: number;
+  };
+  revenue: {
+    total: number;
+    growthRate: string; // Can be "+X.XX" or "-X.XX"
+    newSinceLastMonth: number;
+  };
+  platformFee: {
+    currentRate: number;
+    lastChanged: string;
+  };
+}
+
+interface MonthlyRevenueData {
+  month: string;
+  year: number;
+  revenue: number;
+  totalSales: number;
+  ticketsSold: number;
+}
+
+interface UserGrowthData {
+  month: string;
+  year: number;
+  newUsers: number;
+  totalUsers: number;
+}
+
+interface EventStatistics {
+  month: string;
+  year: number;
+  newEvents: number;
+  ticketsSold: number;
+  averageTicketsPerEvent: number;
+  eventOccupancyRate: number;
+}
+
+// Define a type for the ticket object when calculating sales
+// Extend the inferred Ticket type
+interface TicketWithOrderDate extends Ticket {
+  orderCreatedAt?: Date | null;
+}
+
 // Admin user management functions
-export async function getAllUsers() {
+export async function getAllUsers(): Promise<User[]> {
   try {
     const allUsers = await db.select().from(users);
     return allUsers;
@@ -35,7 +126,7 @@ export async function getAllUsers() {
   }
 }
 
-export async function getUserById(id: string) {
+export async function getUserById(id: string): Promise<User> {
   try {
     const user = await db.select().from(users).where(eq(users.id, id)).limit(1);
 
@@ -56,7 +147,7 @@ export async function updateUser(
     role?: 'user' | 'organizer' | 'admin';
     status?: 'active' | 'inactive' | 'banned';
   },
-) {
+): Promise<User> {
   try {
     // Only update the fields that are provided
     const updateData: Partial<typeof users.$inferInsert> = {};
@@ -86,7 +177,7 @@ export async function updateUser(
   }
 }
 
-export async function deleteUser(id: string) {
+export async function deleteUser(id: string): Promise<boolean> {
   try {
     const deleted = await db.delete(users).where(eq(users.id, id)).returning();
 
@@ -102,7 +193,7 @@ export async function deleteUser(id: string) {
 }
 
 // Function to get user statistics
-export async function getUserStats(id: string) {
+export async function getUserStats(id: string): Promise<UserStats> {
   try {
     // Check if user exists
     await getUserById(id);
@@ -124,7 +215,7 @@ export async function getUserStats(id: string) {
     const totalSpent =
       userTickets
         .filter((ticket) => ticket.status === 'booked')
-        .reduce((sum, ticket) => sum + ticket.price, 0) / 100;
+        .reduce((sum, ticket) => sum + (ticket.price || 0), 0) / 100; // Added null check for price
 
     // Get the current date
     const now = new Date();
@@ -171,7 +262,7 @@ export async function getUserStats(id: string) {
 }
 
 // Function to get user events
-export async function getUserEvents(id: string) {
+export async function getUserEvents(id: string): Promise<UserEvent[]> {
   try {
     // Check if user exists
     await getUserById(id);
@@ -245,7 +336,7 @@ export async function getUserEvents(id: string) {
           id: ticket.ticketTypeId,
           name: ticket.ticketTypeName || 'Unknown Ticket Type',
           count: 1,
-          price: ticket.price || 0,
+          price: ticket.price || 0, // Added null check
         };
       } else {
         // Increment count for this ticket type
@@ -289,7 +380,9 @@ export async function getUserEvents(id: string) {
 }
 
 // Function to get user transactions
-export async function getUserTransactions(id: string) {
+export async function getUserTransactions(
+  id: string,
+): Promise<UserTransaction[]> {
   try {
     // Check if user exists
     await getUserById(id);
@@ -315,12 +408,14 @@ export async function getUserTransactions(id: string) {
       .map((transaction) => ({
         id: transaction.id,
         eventTitle: transaction.eventTitle || 'Unknown Event',
-        amount: transaction.amount / 100, // Convert cents to dollars
+        amount: (transaction.amount || 0) / 100, // Convert cents to dollars, added null check
         createdAt: transaction.createdAt
           ? transaction.createdAt.toISOString()
           : new Date().toISOString(),
         status:
-          transaction.status === 'booked' ? 'completed' : transaction.status,
+          transaction.status === 'booked'
+            ? 'completed'
+            : transaction.status || 'unknown', // Added null check for status
       }));
   } catch (error) {
     logger.error(`Error fetching transactions for user ${id}: ${error}`);
@@ -329,7 +424,9 @@ export async function getUserTransactions(id: string) {
 }
 
 // Get monthly user registration statistics for the past 6 months
-export async function getMonthlyUserStats() {
+export async function getMonthlyUserStats(): Promise<{
+  data: MonthlyUserStat[];
+}> {
   try {
     // Get all users with their creation dates
     const allUsers = await db.select().from(users);
@@ -384,7 +481,7 @@ export async function getMonthlyUserStats() {
     const result = Array.from(monthlyCounts.entries())
       .sort((a, b) => a[0].localeCompare(b[0])) // Sort by year-month
       .map(([key, count]) => {
-        const [year, month] = key.split('-').map(Number);
+        const [, month] = key.split('-').map(Number); // Year is unused, only need month index
         return {
           month: monthNames[month - 1],
           total: count,
@@ -399,7 +496,7 @@ export async function getMonthlyUserStats() {
 }
 
 // Update getDashboardStats to use real platform fee data and get revenue from completed orders
-export async function getDashboardStats() {
+export async function getDashboardStats(): Promise<DashboardStats> {
   try {
     // First, try to get from cache
     const cachedStats = await getCachedDashboardStats();
@@ -465,8 +562,9 @@ export async function getDashboardStats() {
           platformFeeLastChanged = configs[0].updatedAt.toISOString();
         }
       }
-    } catch (error) {
-      logger.warn('Using default platform fee due to missing configuration');
+    } catch (feeError) {
+      // Use the error variable
+      logger.warn(`Using default platform fee due to error: ${feeError}`);
     }
 
     // Get all completed orders
@@ -488,7 +586,7 @@ export async function getDashboardStats() {
     let previousMonthSales = 0;
 
     // Use a Map to ensure we count each ticket only once
-    const uniqueTickets = new Map();
+    const uniqueTickets = new Map<string, TicketWithOrderDate>();
 
     if (completedOrders.length > 0) {
       // Process order IDs in batches to avoid exceeding parameter limits
@@ -529,7 +627,8 @@ export async function getDashboardStats() {
 
       // Calculate total sales from all tickets
       totalSales = Array.from(uniqueTickets.values()).reduce(
-        (sum: number, ticketWithDate: any) => {
+        (sum: number, ticketWithDate: TicketWithOrderDate) => {
+          // Access price directly from the extended Ticket type
           return sum + (ticketWithDate?.price || 0) / 100; // Convert from cents to dollars
         },
         0,
@@ -537,13 +636,14 @@ export async function getDashboardStats() {
 
       // Calculate sales for current month (last 30 days)
       currentMonthSales = Array.from(uniqueTickets.values()).reduce(
-        (sum: number, ticketWithDate: any) => {
+        (sum: number, ticketWithDate: TicketWithOrderDate) => {
           if (
             ticketWithDate &&
             ticketWithDate.orderCreatedAt &&
             new Date(ticketWithDate.orderCreatedAt) >= currentMonthStart &&
             new Date(ticketWithDate.orderCreatedAt) <= now
           ) {
+            // Access price directly
             return sum + (ticketWithDate?.price || 0) / 100;
           }
           return sum;
@@ -553,13 +653,14 @@ export async function getDashboardStats() {
 
       // Calculate sales for previous month (30-60 days ago)
       previousMonthSales = Array.from(uniqueTickets.values()).reduce(
-        (sum: number, ticketWithDate: any) => {
+        (sum: number, ticketWithDate: TicketWithOrderDate) => {
           if (
             ticketWithDate &&
             ticketWithDate.orderCreatedAt &&
             new Date(ticketWithDate.orderCreatedAt) >= previousMonthStart &&
             new Date(ticketWithDate.orderCreatedAt) <= previousMonthEnd
           ) {
+            // Access price directly
             return sum + (ticketWithDate?.price || 0) / 100;
           }
           return sum;
@@ -592,7 +693,7 @@ export async function getDashboardStats() {
     logger.info(`Revenue Growth Rate: ${revenueGrowthRate.toFixed(2)}%`);
 
     // Create the final response object
-    const response = {
+    const response: DashboardStats = {
       users: {
         total: totalUsers,
         growthRate: parseFloat(growthRate.toFixed(2)),
@@ -625,7 +726,7 @@ export async function getDashboardStats() {
 /**
  * Get monthly revenue data for the past year
  */
-export async function getMonthlyRevenueData() {
+export async function getMonthlyRevenueData(): Promise<MonthlyRevenueData[]> {
   try {
     // First, try to get from cache
     const cachedData = await getCachedMonthlyRevenueData();
@@ -657,8 +758,9 @@ export async function getMonthlyRevenueData() {
       if (configs.length > 0) {
         platformFeePercentage = parseFloat(configs[0].value);
       }
-    } catch (error) {
-      logger.warn('Using default platform fee due to missing configuration');
+    } catch (feeError) {
+      // Use the error variable
+      logger.warn(`Using default platform fee due to error: ${feeError}`);
     }
 
     // Get all completed orders in the date range
@@ -668,17 +770,19 @@ export async function getMonthlyRevenueData() {
       .where(eq(orders.status, 'completed'));
 
     // Create month buckets for the last 12 months
-    const monthlyRevenue = new Array(12).fill(0).map((_, index) => {
-      const date = new Date(startDate);
-      date.setMonth(startDate.getMonth() + index);
-      return {
-        month: date.toLocaleString('default', { month: 'short' }),
-        year: date.getFullYear(),
-        revenue: 0,
-        totalSales: 0,
-        ticketsSold: 0,
-      };
-    });
+    const monthlyRevenue: MonthlyRevenueData[] = new Array(12)
+      .fill(0)
+      .map((_, index) => {
+        const date = new Date(startDate);
+        date.setMonth(startDate.getMonth() + index);
+        return {
+          month: date.toLocaleString('default', { month: 'short' }),
+          year: date.getFullYear(),
+          revenue: 0,
+          totalSales: 0,
+          ticketsSold: 0,
+        };
+      });
 
     // Get order IDs for completed orders
     const orderIds = completedOrders.map((order) => order.id);
@@ -749,7 +853,7 @@ export async function getMonthlyRevenueData() {
 /**
  * Get user growth data for the past year
  */
-export async function getUserGrowthData() {
+export async function getUserGrowthData(): Promise<UserGrowthData[]> {
   try {
     // First, try to get from cache
     const cachedData = await getCachedUserGrowthData();
@@ -773,16 +877,18 @@ export async function getUserGrowthData() {
     const allUsers = await db.select().from(users);
 
     // Create month buckets for the last 12 months
-    const monthlyGrowth = new Array(12).fill(0).map((_, index) => {
-      const date = new Date(startDate);
-      date.setMonth(startDate.getMonth() + index);
-      return {
-        month: date.toLocaleString('default', { month: 'short' }),
-        year: date.getFullYear(),
-        newUsers: 0,
-        totalUsers: 0,
-      };
-    });
+    const monthlyGrowth: UserGrowthData[] = new Array(12)
+      .fill(0)
+      .map((_, index) => {
+        const date = new Date(startDate);
+        date.setMonth(startDate.getMonth() + index);
+        return {
+          month: date.toLocaleString('default', { month: 'short' }),
+          year: date.getFullYear(),
+          newUsers: 0,
+          totalUsers: 0,
+        };
+      });
 
     // Calculate cumulative user count for each month
     let cumulativeCount = 0;
@@ -830,15 +936,20 @@ export async function getUserGrowthData() {
   }
 }
 
+// Define a temporary type for monthStat including totalCapacity
+interface MonthlyStatWithCapacity extends EventStatistics {
+  totalCapacity: number;
+}
+
 /**
  * Get event statistics for the past year
  */
-export async function getEventStatistics() {
+export async function getEventStatistics(): Promise<EventStatistics[]> {
   try {
     // First, try to get from cache
     const cachedData = await getCachedEventStatistics();
     if (cachedData) {
-      logger.info('Using cached event statistics');
+      logger.info('Event statistics found in cache.');
       return cachedData;
     }
 
@@ -850,148 +961,139 @@ export async function getEventStatistics() {
     const currentDate = new Date();
     const startDate = new Date(currentDate);
     startDate.setMonth(startDate.getMonth() - 11);
-    startDate.setDate(1); // Start from the 1st day of the month
+    startDate.setDate(1);
     startDate.setHours(0, 0, 0, 0);
 
-    // Create month buckets for the last 12 months
-    const monthlyStats = new Array(12).fill(0).map((_, index) => {
-      const date = new Date(startDate);
-      date.setMonth(startDate.getMonth() + index);
-      return {
-        month: date.toLocaleString('default', { month: 'short' }),
-        year: date.getFullYear(),
-        newEvents: 0,
-        ticketsSold: 0,
-        averageTicketsPerEvent: 0,
-        eventOccupancyRate: 0,
-      };
-    });
+    const monthNames = [
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec',
+    ];
 
-    // ========= EVENTS COUNT BY MONTH - OPTIMIZED =========
-    // Filter at the database level instead of fetching all events
-    const eventsInPeriod = await db
+    // Create month buckets for the last 12 months
+    const monthlyStats: MonthlyStatWithCapacity[] = new Array(12)
+      .fill(0)
+      .map((_, index) => {
+        const monthDate = new Date(startDate);
+        monthDate.setMonth(startDate.getMonth() + index);
+        return {
+          month: monthNames[monthDate.getMonth()],
+          year: monthDate.getFullYear(),
+          newEvents: 0,
+          ticketsSold: 0,
+          averageTicketsPerEvent: 0,
+          eventOccupancyRate: 0, // Initialize occupancy rate
+          totalCapacity: 0, // Add total capacity for calculation
+        };
+      });
+
+    // Fetch all relevant events within the 12-month range
+    const relevantEvents = await db
       .select({
         id: events.id,
-        createdAt: events.createdAt,
+        startTimestamp: events.startTimestamp,
         capacity: events.capacity,
       })
       .from(events)
       .where(
         and(
-          gte(events.createdAt, startDate),
-          lte(events.createdAt, currentDate),
+          gte(events.startTimestamp, startDate),
+          lte(events.startTimestamp, currentDate),
+          eq(events.status, 'published'), // Consider only published events for stats
         ),
       );
 
-    // Process events to count by month
-    const eventsByMonth = new Map<
-      number,
-      { count: number; capacitySum: number }
-    >();
-    for (let i = 0; i < 12; i++) {
-      eventsByMonth.set(i, { count: 0, capacitySum: 0 });
+    if (relevantEvents.length === 0) {
+      logger.info('No relevant events found in the last 12 months.');
+      // Remove totalCapacity before caching/returning - Corrected: removed unused destructuring
+      const finalStats = monthlyStats.map(
+        ({ totalCapacity: _unused, ...rest }) => rest,
+      );
+      await cacheEventStatistics(finalStats);
+      return finalStats;
     }
 
-    eventsInPeriod.forEach((event) => {
-      if (event.createdAt) {
-        const creationDate = new Date(event.createdAt);
-        const monthDiff =
-          (creationDate.getFullYear() - startDate.getFullYear()) * 12 +
-          (creationDate.getMonth() - startDate.getMonth());
+    const eventIds = relevantEvents.map((e) => e.id);
 
-        if (monthDiff >= 0 && monthDiff < 12) {
-          const monthData = eventsByMonth.get(monthDiff);
-          if (monthData) {
-            monthData.count += 1;
-            monthData.capacitySum += event.capacity || 0;
-            eventsByMonth.set(monthDiff, monthData);
-          }
-        }
+    // Fetch tickets sold for these events
+    const ticketsSoldData = await db
+      .select({
+        eventId: tickets.eventId,
+        count: count(tickets.id),
+        eventTimestamp: events.startTimestamp, // Include timestamp for grouping
+      })
+      .from(tickets)
+      .leftJoin(events, eq(tickets.eventId, events.id)) // Join to get event timestamp
+      .where(
+        and(
+          inArray(tickets.eventId, eventIds),
+          eq(tickets.status, 'booked'), // Count only booked tickets
+        ),
+      )
+      .groupBy(sql`${tickets.eventId}`, sql`${events.startTimestamp}`); // Use sql helper for groupBy
+
+    // Map tickets sold to event IDs for easier lookup
+    const ticketsSoldMap = new Map<string, number>();
+    ticketsSoldData.forEach((item) => {
+      if (item.eventId) {
+        ticketsSoldMap.set(item.eventId, item.count);
       }
     });
 
-    // Update the monthly stats with event counts
-    for (let i = 0; i < 12; i++) {
-      const monthData = eventsByMonth.get(i);
-      if (monthData) {
-        monthlyStats[i].newEvents = monthData.count;
+    // Process events and aggregate stats by month
+    relevantEvents.forEach((event) => {
+      if (!event.startTimestamp) return; // Skip if no start timestamp
+      const eventDate = new Date(event.startTimestamp);
+      const monthIndex =
+        (eventDate.getFullYear() - startDate.getFullYear()) * 12 +
+        eventDate.getMonth() -
+        startDate.getMonth();
+
+      if (monthIndex >= 0 && monthIndex < 12) {
+        const monthStat = monthlyStats[monthIndex];
+        monthStat.newEvents += 1;
+        const soldCount = ticketsSoldMap.get(event.id) || 0;
+        monthStat.ticketsSold += soldCount;
+        // Add event capacity to the month's total capacity
+        monthStat.totalCapacity += event.capacity || 0; // Use 0 if capacity is null/undefined
       }
-    }
+    });
 
-    // ========= TICKETS SOLD BY MONTH - OPTIMIZED =========
-    // First get all order IDs for completed orders in the time period
-    const completedOrdersInPeriod = await db
-      .select({
-        id: orders.id,
-        createdAt: orders.createdAt,
-      })
-      .from(orders)
-      .where(
-        and(
-          eq(orders.status, 'completed'),
-          gte(orders.createdAt, startDate),
-          lte(orders.createdAt, currentDate),
-        ),
-      );
-
-    // If we have orders, get all their items in a single batch query
-    if (completedOrdersInPeriod.length > 0) {
-      const orderIds = completedOrdersInPeriod.map((order) => order.id);
-
-      // Get all order items for these orders in a single query
-      const allOrderItems = await db
-        .select({
-          orderId: orderItems.orderId,
-          ticketId: orderItems.ticketId,
-          createdAt: orders.createdAt,
-        })
-        .from(orderItems)
-        .leftJoin(orders, eq(orderItems.orderId, orders.id))
-        .where(inArray(orderItems.orderId, orderIds));
-
-      // Process all order items
-      for (const item of allOrderItems) {
-        if (item.createdAt) {
-          const orderDate = new Date(item.createdAt);
-          const monthDiff =
-            (orderDate.getFullYear() - startDate.getFullYear()) * 12 +
-            (orderDate.getMonth() - startDate.getMonth());
-
-          if (monthDiff >= 0 && monthDiff < 12) {
-            monthlyStats[monthDiff].ticketsSold += 1;
-          }
-        }
-      }
-    }
-
-    // ========= CALCULATE METRICS - IMPROVED =========
-    // Now calculate our derived metrics for each month
-    for (let i = 0; i < 12; i++) {
-      // If we have events in this month, calculate the average tickets per event
-      if (monthlyStats[i].newEvents > 0) {
-        monthlyStats[i].averageTicketsPerEvent = Math.round(
-          monthlyStats[i].ticketsSold / monthlyStats[i].newEvents,
+    // Calculate average tickets and occupancy rate for each month
+    monthlyStats.forEach((monthStat) => {
+      if (monthStat.newEvents > 0) {
+        monthStat.averageTicketsPerEvent = Math.round(
+          monthStat.ticketsSold / monthStat.newEvents,
         );
-
-        // Calculate real occupancy rate based on capacity
-        const monthData = eventsByMonth.get(i);
-        if (monthData && monthData.capacitySum > 0) {
-          monthlyStats[i].eventOccupancyRate = Math.round(
-            (monthlyStats[i].ticketsSold / monthData.capacitySum) * 100,
-          );
-        } else {
-          monthlyStats[i].eventOccupancyRate = 0;
-        }
-      } else {
-        monthlyStats[i].averageTicketsPerEvent = 0;
-        monthlyStats[i].eventOccupancyRate = 0;
       }
-    }
+      if (monthStat.totalCapacity > 0) {
+        monthStat.eventOccupancyRate = parseFloat(
+          ((monthStat.ticketsSold / monthStat.totalCapacity) * 100).toFixed(2),
+        );
+      } else {
+        // Handle case where total capacity is 0 (e.g., no events or events with 0 capacity)
+        monthStat.eventOccupancyRate = 0;
+      }
+    });
+
+    // Remove temporary totalCapacity field before returning/caching - Corrected: removed unused destructuring
+    const finalStats: EventStatistics[] = monthlyStats.map(
+      ({ totalCapacity: _unused, ...rest }) => rest,
+    );
 
     // Cache the data before returning
-    await cacheEventStatistics(monthlyStats);
+    await cacheEventStatistics(finalStats);
 
-    return monthlyStats;
+    return finalStats;
   } catch (error) {
     logger.error(`Error fetching event statistics: ${error}`);
     throw error;
