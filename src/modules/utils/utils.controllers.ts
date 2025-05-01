@@ -8,8 +8,8 @@ export async function getCountriesHandler(
   reply: FastifyReply,
 ) {
   try {
-    // Determine a default country (e.g., 'US')
-    const defaultCountry = 'US';
+    // Determine a default country (e.g., 'SG' for Singapore)
+    const defaultCountry = 'SG';
 
     // Ensure the default country exists in the list
     const defaultExists = countries.some((c) => c.code === defaultCountry);
