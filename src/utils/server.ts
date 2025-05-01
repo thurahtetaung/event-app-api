@@ -11,6 +11,7 @@ import { adminRoutes } from '../modules/admin/admin.routes';
 import { ticketRoutes } from '../modules/tickets/tickets.routes';
 import { categoryRoutes } from '../modules/categories/categories.routes';
 import { platformConfigurationsRoutes } from '../modules/platform-configurations/platform-configurations.routes';
+import { utilityRoutes } from '../modules/utils/utils.routes'; // Import utility routes
 
 export async function createServer() {
   const server = fastify({
@@ -38,5 +39,7 @@ export async function createServer() {
   server.register(platformConfigurationsRoutes, {
     prefix: '/api/platform-configurations',
   });
+  server.register(utilityRoutes, { prefix: '/api/utils' }); // Register utility routes
+
   return server;
 }
