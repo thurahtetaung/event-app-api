@@ -72,35 +72,29 @@ export async function createEventHandler(
 }
 
 export async function getEventsHandler(
-  request: FastifyRequest,
-  reply: FastifyReply,
-) {
-  try {
-    const queryParams = request.query as {
+  request: FastifyRequest<{
+    Querystring: {
       category?: string;
       query?: string;
       sort?: 'date' | 'price-low' | 'price-high';
-      date?: string;
+      startDate?: string; // Add startDate
+      endDate?: string; // Add endDate
       priceRange?: 'all' | 'free' | 'paid';
       minPrice?: string;
       maxPrice?: string;
-      isOnline?: string;
-      isInPerson?: string;
-      limit?: string;
+      isOnline?: boolean;
+      isInPerson?: boolean;
+      limit?: number;
     };
-
-    logger.debug('Received query params:', queryParams);
-
-    // Convert limit to a number if it exists
-    const parsedParams = {
-      ...queryParams,
-      limit: queryParams.limit ? parseInt(queryParams.limit) : undefined,
-    };
-
-    const events = await getEvents(parsedParams);
+  }>,
+  reply: FastifyReply,
+) {
+  try {
+    const events = await getEvents(request.query);
     return reply.code(200).send(events);
   } catch (error) {
-    return handleError(error, request, reply);
+    logger.error(`Error in getEventsHandler: ${error}`);
+    return reply.code(500).send({ message: 'Internal Server Error' });
   }
 }
 

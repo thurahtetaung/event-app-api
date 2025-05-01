@@ -64,7 +64,8 @@ export const eventQuerySchema = z.object({
   category: z.string().optional(),
   query: z.string().optional(),
   sort: z.enum(['date', 'price-low', 'price-high']).optional(),
-  date: z.string().optional(),
+  startDate: z.string().optional(), // Add startDate
+  endDate: z.string().optional(), // Add endDate
   priceRange: z.enum(['all', 'free', 'paid']).optional(),
   minPrice: z.string().optional(),
   maxPrice: z.string().optional(),
@@ -118,7 +119,24 @@ export const deleteEventJSONSchema = {
 };
 
 export const eventQueryJSONSchema = {
-  querystring: zodToJsonSchema(eventQuerySchema, 'eventQuerySchema'),
+  querystring: {
+    type: 'object',
+    properties: {
+      category: { type: 'string' },
+      query: { type: 'string' },
+      sort: { type: 'string', enum: ['date', 'price-low', 'price-high'] },
+      // date: { type: 'string', format: 'date' }, // Remove single date
+      startDate: { type: 'string', format: 'date' }, // Add startDate
+      endDate: { type: 'string', format: 'date' }, // Add endDate
+      priceRange: { type: 'string', enum: ['all', 'free', 'paid'] },
+      minPrice: { type: 'string' },
+      maxPrice: { type: 'string' },
+      isOnline: { type: 'boolean' },
+      isInPerson: { type: 'boolean' },
+      limit: { type: 'number' },
+    },
+    additionalProperties: false,
+  },
 };
 
 export const eventIdParamJSONSchema = {

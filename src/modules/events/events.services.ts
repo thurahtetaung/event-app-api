@@ -9,7 +9,7 @@ import {
   categories,
 } from '../../db/schema';
 import { logger } from '../../utils/logger';
-import { count, desc } from 'drizzle-orm';
+import { count, desc, gt, asc, gte, lte } from 'drizzle-orm';
 import {
   AppError,
   NotFoundError,
@@ -268,7 +268,8 @@ export async function getEvents(params?: {
   category?: string;
   query?: string;
   sort?: 'date' | 'price-low' | 'price-high';
-  date?: string;
+  startDate?: string; // Add startDate
+  endDate?: string; // Add endDate
   priceRange?: 'all' | 'free' | 'paid';
   minPrice?: string;
   maxPrice?: string;
@@ -294,7 +295,10 @@ export async function getEvents(params?: {
     );
 
     // Build the where conditions
-    const conditions = [eq(events.status, 'published')];
+    const conditions = [
+      eq(events.status, 'published'),
+      gt(events.startTimestamp, new Date()), // Add condition for upcoming events
+    ];
 
     // Category filter
     if (params?.category && params.category !== 'All Categories') {
@@ -348,10 +352,28 @@ export async function getEvents(params?: {
       logger.debug('Added search filter:', params.query);
     }
 
-    // Date filter
-    if (params?.date) {
-      conditions.push(sql`DATE(${events.startTimestamp}) = ${params.date}`);
-      logger.debug('Added date filter:', params.date);
+    // Date range filter
+    if (params?.startDate) {
+      try {
+        const start = new Date(params.startDate);
+        // Set time to the beginning of the day
+        start.setHours(0, 0, 0, 0);
+        conditions.push(gte(events.startTimestamp, start));
+        logger.debug('Added start date filter:', start.toISOString());
+      } catch (e) {
+        logger.warn('Invalid start date format:', params.startDate);
+      }
+    }
+    if (params?.endDate) {
+      try {
+        const end = new Date(params.endDate);
+        // Set time to the end of the day
+        end.setHours(23, 59, 59, 999);
+        conditions.push(lte(events.startTimestamp, end));
+        logger.debug('Added end date filter:', end.toISOString());
+      } catch (e) {
+        logger.warn('Invalid end date format:', params.endDate);
+      }
     }
 
     // Online/In-person filter
@@ -446,7 +468,8 @@ export async function getEvents(params?: {
         0
       ) DESC`);
     } else {
-      query = baseQuery.orderBy(desc(events.startTimestamp));
+      // Default sort by startTimestamp ascending (earliest first)
+      query = baseQuery.orderBy(asc(events.startTimestamp));
     }
 
     // Apply limit if specified

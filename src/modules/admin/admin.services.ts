@@ -129,14 +129,19 @@ export async function getUserStats(id: string) {
     // Get the current date
     const now = new Date();
 
-    // Count tickets by status
-    // Events are considered "attended" if they are booked and their start date is in the past
-    const eventsAttended = userTickets.filter(
+    // Filter tickets for booked events that have already started
+    const attendedTickets = userTickets.filter(
       (ticket) =>
         ticket.status === 'booked' &&
         ticket.startTimestamp &&
         new Date(ticket.startTimestamp) < now,
-    ).length;
+    );
+
+    // Count unique attended events using a Set
+    const attendedEventIds = new Set(
+      attendedTickets.map((ticket) => ticket.eventId),
+    );
+    const eventsAttended = attendedEventIds.size;
 
     // Events are considered "upcoming" if they are booked and their start date is in the future
     const eventsUpcoming = userTickets.filter(
