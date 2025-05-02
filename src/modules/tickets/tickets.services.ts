@@ -29,6 +29,8 @@ import {
 } from '../../utils/errors';
 import { checkOrganizationAccess } from '../organizations/organizations.services';
 import { DatabaseError } from 'pg-protocol/dist';
+import { sendEmail, ticketConfirmationTemplate } from '../../utils/email'; // Import email utilities
+import { format } from 'date-fns'; // Import date-fns format
 
 interface PurchaseTicketsInput {
   eventId: string;
@@ -425,6 +427,60 @@ export async function purchaseTickets(
           }),
         );
 
+        // --- Send Confirmation Email for Free Tickets ---
+        try {
+          const [user] = await tx
+            .select({ email: users.email, firstName: users.firstName })
+            .from(users)
+            .where(eq(users.id, userId))
+            .limit(1);
+          if (user && user.email) {
+            // Group tickets by type for the email, including price (0 for free)
+            const ticketsInfoForEmail = selectedTickets.reduce(
+              (acc, { ticketType }) => {
+                const existing = acc.find((t) => t.name === ticketType.name);
+                if (existing) {
+                  existing.quantity += 1;
+                } else {
+                  acc.push({ name: ticketType.name, quantity: 1, price: 0 }); // Add price: 0
+                }
+                return acc;
+              },
+              [] as Array<{ name: string; quantity: number; price?: number }>,
+            );
+
+            await sendEmail({
+              to: user.email,
+              subject: `Your Ticket Confirmation for ${event.title}`,
+              html: ticketConfirmationTemplate({
+                userName: user.firstName || '',
+                eventName: event.title,
+                eventDate: format(
+                  new Date(event.startTimestamp),
+                  "PPP 'at' h:mm a",
+                ), // Format date
+                ticketsInfo: ticketsInfoForEmail,
+                orderId: order.id,
+                eventUrl: `${env.FRONTEND_URL || 'http://localhost:3000'}/my-events/${event.id}`,
+              }),
+            });
+            logger.info(
+              `Sent free ticket confirmation email for order ${order.id} to ${user.email}`,
+            );
+          } else {
+            logger.warn(
+              `Could not send confirmation email for order ${order.id}: User ${userId} not found or no email.`,
+            );
+          }
+        } catch (emailError) {
+          logger.error(
+            `Failed to send free ticket confirmation email for order ${order.id}:`,
+            emailError,
+          );
+          // Do not throw, let the purchase succeed
+        }
+        // --- End Email Sending ---
+
         return {
           success: true,
           message: 'Free tickets confirmed successfully',
@@ -628,6 +684,84 @@ export async function handleSuccessfulPayment(
             .where(eq(tickets.id, ticket.id));
         }),
       );
+
+      // --- Send Confirmation Email for Paid Tickets ---
+      try {
+        const [user] = await tx
+          .select({ email: users.email, firstName: users.firstName })
+          .from(users)
+          .where(eq(users.id, metadata.userId))
+          .limit(1);
+        const [event] = await tx
+          .select({
+            title: events.title,
+            startTimestamp: events.startTimestamp,
+          })
+          .from(events)
+          .where(eq(events.id, metadata.eventId))
+          .limit(1);
+
+        if (user && user.email && event) {
+          // Fetch ticket details including price for the purchased tickets
+          const purchasedTicketDetails = await tx
+            .select({ name: ticketTypes.name, price: tickets.price })
+            .from(tickets)
+            .innerJoin(ticketTypes, eq(tickets.ticketTypeId, ticketTypes.id))
+            .where(inArray(tickets.id, ticketIds));
+
+          // Calculate total price
+          const totalPrice = purchasedTicketDetails.reduce(
+            (sum, ticket) => sum + ticket.price,
+            0,
+          );
+
+          // Group tickets by type name for the email, including price
+          const ticketsInfoForEmail = purchasedTicketDetails.reduce(
+            (acc, { name, price }) => {
+              const existing = acc.find((t) => t.name === name);
+              if (existing) {
+                existing.quantity += 1;
+              } else {
+                // Ensure price is included when adding a new type
+                acc.push({ name: name, quantity: 1, price: price });
+              }
+              return acc;
+            },
+            [] as Array<{ name: string; quantity: number; price?: number }>,
+          );
+
+          await sendEmail({
+            to: user.email,
+            subject: `Your Ticket Confirmation for ${event.title}`,
+            html: ticketConfirmationTemplate({
+              userName: user.firstName || '',
+              eventName: event.title,
+              eventDate: format(
+                new Date(event.startTimestamp),
+                "PPP 'at' h:mm a",
+              ),
+              ticketsInfo: ticketsInfoForEmail, // Now includes price per type
+              orderId: metadata.orderId,
+              eventUrl: `${env.FRONTEND_URL || 'http://localhost:3000'}/my-events/${metadata.eventId}`,
+              totalPrice: totalPrice,
+            }),
+          });
+          logger.info(
+            `Sent paid ticket confirmation email for order ${metadata.orderId} to ${user.email}`,
+          );
+        } else {
+          logger.warn(
+            `Could not send confirmation email for order ${metadata.orderId}: User, email, or event details missing.`,
+          );
+        }
+      } catch (emailError) {
+        logger.error(
+          `Failed to send paid ticket confirmation email for order ${metadata.orderId}:`,
+          emailError,
+        );
+        // Do not throw, let the payment handling succeed
+      }
+      // --- End Email Sending ---
 
       return order;
     });
