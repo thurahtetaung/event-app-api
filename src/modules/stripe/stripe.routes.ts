@@ -5,7 +5,8 @@ import {
   updateStripeAccountStatusHandler,
   completeStripeOnboardingHandler,
   refreshStripeOnboardingHandler,
-  stripeWebhookHandler,
+  stripeWebhookHandler, // General webhook handler
+  stripeConnectWebhookHandler, // Connect webhook handler
 } from './stripe.controllers';
 import {
   stripeAccountSchema,
@@ -79,7 +80,7 @@ export async function stripeRoutes(app: FastifyInstance) {
     updateStripeAccountStatusHandler,
   );
 
-  // Handle Stripe webhooks
+  // Handle general Stripe webhooks (excluding Connect events)
   app.post(
     '/webhook',
     {
@@ -87,6 +88,17 @@ export async function stripeRoutes(app: FastifyInstance) {
         rawBody: true,
       },
     },
-    stripeWebhookHandler,
+    stripeWebhookHandler, // Use the general handler
+  );
+
+  // Handle Stripe Connect webhooks (specifically account.updated)
+  app.post(
+    '/webhook/connect', // New endpoint for Connect webhooks
+    {
+      config: {
+        rawBody: true,
+      },
+    },
+    stripeConnectWebhookHandler, // Use the Connect-specific handler
   );
 }

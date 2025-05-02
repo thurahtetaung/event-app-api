@@ -19,6 +19,7 @@ export const env = zennv({
     STRIPE_SECRET_KEY: z.string(),
     STRIPE_PUBLISHABLE_KEY: z.string(),
     STRIPE_WEBHOOK_SECRET: z.string(),
+    STRIPE_CONNECT_WEBHOOK_SECRET: z.string(), // Add new secret for Connect webhooks
     // JWT configuration
     JWT_SECRET: z.string(),
     // Redis configuration

@@ -368,27 +368,21 @@ export async function handleStripeWebhook(
   rawBody: Buffer,
 ): Promise<void> {
   try {
-    logger.info('Processing Stripe webhook...');
+    logger.info('Processing general Stripe webhook...');
 
-    // Verify webhook signature
+    // Verify webhook signature using the general secret
     const event = stripe.webhooks.constructEvent(
       rawBody,
       signature,
-      env.STRIPE_WEBHOOK_SECRET,
+      env.STRIPE_WEBHOOK_SECRET, // Use general webhook secret
     );
 
-    logger.info(`Received Stripe webhook event type: ${event.type}`);
+    logger.info(`Received general Stripe webhook event type: ${event.type}`);
 
-    // Handle different event types
+    // Handle different event types (excluding account.updated)
     switch (event.type) {
-      case 'account.updated': {
-        const account = event.data.object as Stripe.Account;
-        logger.info(
-          `Processing account update event for account ${account.id}`,
-        );
-        await completeStripeOnboarding(account.id);
-        break;
-      }
+      // case 'account.updated': // This is handled by the connect webhook
+      //   break;
 
       case 'checkout.session.completed': {
         const session = event.data.object as Stripe.Checkout.Session;
@@ -436,12 +430,12 @@ export async function handleStripeWebhook(
       }
 
       default:
-        logger.info(`Unhandled event type: ${event.type}`);
+        logger.info(`Unhandled general event type: ${event.type}`);
     }
 
-    logger.info(`Successfully processed webhook event ${event.id}`);
+    logger.info(`Successfully processed general webhook event ${event.id}`);
   } catch (error) {
-    logger.error(`Error handling Stripe webhook: ${error}`);
+    logger.error(`Error handling general Stripe webhook: ${error}`);
     if (
       error.name === 'NotFoundError' ||
       error.name === 'ValidationError' ||
@@ -451,7 +445,54 @@ export async function handleStripeWebhook(
     }
     throw new AppError(
       500,
-      `Failed to handle Stripe webhook: ${error.message}`,
+      `Failed to handle general Stripe webhook: ${error.message}`,
+    );
+  }
+}
+
+export async function handleStripeConnectWebhook(
+  signature: string,
+  rawBody: Buffer,
+): Promise<void> {
+  try {
+    logger.info('Processing Stripe Connect webhook...');
+
+    // Verify webhook signature using the Connect secret
+    const event = stripe.webhooks.constructEvent(
+      rawBody,
+      signature,
+      env.STRIPE_CONNECT_WEBHOOK_SECRET, // Use Connect webhook secret
+    );
+
+    logger.info(`Received Stripe Connect webhook event type: ${event.type}`);
+
+    // Handle account.updated event
+    if (event.type === 'account.updated') {
+      const account = event.data.object as Stripe.Account;
+      logger.info(
+        `Processing account update event for account ${account.id} from Connect webhook`,
+      );
+      await completeStripeOnboarding(account.id);
+    } else {
+      logger.warn(
+        `Received non-account.updated event type on Connect webhook: ${event.type}`,
+      );
+      // Optionally handle other Connect-specific events here if needed
+    }
+
+    logger.info(`Successfully processed Connect webhook event ${event.id}`);
+  } catch (error) {
+    logger.error(`Error handling Stripe Connect webhook: ${error}`);
+    if (
+      error.name === 'NotFoundError' ||
+      error.name === 'ValidationError' ||
+      error.name === 'ForbiddenError'
+    ) {
+      throw error;
+    }
+    throw new AppError(
+      500,
+      `Failed to handle Stripe Connect webhook: ${error.message}`,
     );
   }
 }

@@ -82,7 +82,22 @@ export async function stripeWebhookHandler(
 ) {
   try {
     const signature = request.headers['stripe-signature'] as string;
+    // Use the general webhook handler
     await handleStripeWebhook(signature, request.rawBody as Buffer);
+    return reply.code(200).send({ received: true });
+  } catch (error) {
+    return handleError(error, request, reply);
+  }
+}
+
+export async function stripeConnectWebhookHandler(
+  request: FastifyRequest,
+  reply: FastifyReply,
+) {
+  try {
+    const signature = request.headers['stripe-signature'] as string;
+    // Use the Connect-specific webhook handler
+    await handleStripeConnectWebhook(signature, request.rawBody as Buffer);
     return reply.code(200).send({ received: true });
   } catch (error) {
     return handleError(error, request, reply);
