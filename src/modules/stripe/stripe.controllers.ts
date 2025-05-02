@@ -1,7 +1,4 @@
 import { FastifyReply, FastifyRequest } from 'fastify';
-import { eq } from 'drizzle-orm';
-import { organizations } from '../../db/schema';
-import { db } from '../../db';
 import {
   createStripeConnectAccount,
   updateStripeAccountStatus,
@@ -9,9 +6,9 @@ import {
   completeStripeOnboarding,
   refreshStripeOnboarding,
   getOrganizationWithStripeDetails,
+  handleStripeConnectWebhook,
 } from './stripe.services';
 import { StripeAccountInput, StripeAccountStatusInput } from './stripe.schema';
-import { logger } from '../../utils/logger';
 import { handleError } from '../../utils/errors';
 
 export async function connectStripeAccountHandler(
@@ -19,7 +16,7 @@ export async function connectStripeAccountHandler(
     Body: StripeAccountInput;
   }>,
   reply: FastifyReply,
-) {
+): Promise<FastifyReply> {
   try {
     const result = await createStripeConnectAccount(request.body);
     return reply.code(200).send(result);
@@ -33,7 +30,7 @@ export async function completeStripeOnboardingHandler(
     Params: { organizationId: string };
   }>,
   reply: FastifyReply,
-) {
+): Promise<FastifyReply> {
   try {
     const organization = await getOrganizationWithStripeDetails(
       request.params.organizationId,
@@ -53,7 +50,7 @@ export async function refreshStripeOnboardingHandler(
     Params: { organizationId: string };
   }>,
   reply: FastifyReply,
-) {
+): Promise<FastifyReply> {
   try {
     const result = await refreshStripeOnboarding(request.params.organizationId);
     return reply.code(200).send(result);
@@ -67,7 +64,7 @@ export async function updateStripeAccountStatusHandler(
     Body: StripeAccountStatusInput;
   }>,
   reply: FastifyReply,
-) {
+): Promise<FastifyReply> {
   try {
     const organization = await updateStripeAccountStatus(request.body);
     return reply.code(200).send(organization);
@@ -79,7 +76,7 @@ export async function updateStripeAccountStatusHandler(
 export async function stripeWebhookHandler(
   request: FastifyRequest,
   reply: FastifyReply,
-) {
+): Promise<FastifyReply> {
   try {
     const signature = request.headers['stripe-signature'] as string;
     // Use the general webhook handler
@@ -93,7 +90,7 @@ export async function stripeWebhookHandler(
 export async function stripeConnectWebhookHandler(
   request: FastifyRequest,
   reply: FastifyReply,
-) {
+): Promise<FastifyReply> {
   try {
     const signature = request.headers['stripe-signature'] as string;
     // Use the Connect-specific webhook handler
