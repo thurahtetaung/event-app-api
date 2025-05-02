@@ -167,7 +167,14 @@ export async function getTicketsByUser(userId: string) {
 
     const userTickets = await db
       .select({
-        ticket: tickets,
+        ticket: {
+          id: tickets.id,
+          status: tickets.status,
+          price: tickets.price,
+          bookedAt: tickets.bookedAt,
+          isValidated: tickets.isValidated, // Include isValidated
+          validatedAt: tickets.validatedAt, // Include validatedAt
+        },
         event: events,
         ticketType: ticketTypes,
         organization: organizations,
@@ -181,7 +188,7 @@ export async function getTicketsByUser(userId: string) {
     // Transform the result to match the expected format
     const formattedTickets = userTickets.map(
       ({ ticket, event, ticketType, organization }) => ({
-        ticket,
+        ticket, // Pass the whole ticket object including new fields
         event: {
           id: event.id,
           title: event.title,
