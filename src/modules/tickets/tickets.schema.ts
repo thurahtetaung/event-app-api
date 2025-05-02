@@ -46,7 +46,6 @@ export const validateTicketSchema = z.object({
   params: z.object({
     eventId: z.string().min(1, 'Event ID is required'),
     ticketId: z.string().min(1, 'Ticket ID is required'),
-    accessToken: z.string().uuid('Invalid access token format'),
   }),
 });
 
