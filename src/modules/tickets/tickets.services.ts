@@ -31,6 +31,7 @@ import { checkOrganizationAccess } from '../organizations/organizations.services
 import { DatabaseError } from 'pg-protocol/dist';
 import { sendEmail, ticketConfirmationTemplate } from '../../utils/email'; // Import email utilities
 import { format } from 'date-fns'; // Import date-fns format
+import { formatInTimeZone } from 'date-fns-tz'; // Import formatInTimeZone
 
 interface PurchaseTicketsInput {
   eventId: string;
@@ -225,9 +226,17 @@ export async function purchaseTickets(
   try {
     // Using a transaction to ensure data consistency
     return await db.transaction(async (tx) => {
-      // Step 1: Verify the event exists and is published
+      // Step 1: Verify the event exists and is published - Fetch timezone too
       const [event] = await tx
-        .select()
+        .select({
+          // Select specific fields including timezone
+          id: events.id,
+          title: events.title,
+          startTimestamp: events.startTimestamp,
+          status: events.status,
+          organizationId: events.organizationId,
+          timezone: events.timezone, // Fetch the timezone
+        })
         .from(events)
         .where(eq(events.id, input.eventId))
         .limit(1);
@@ -434,7 +443,7 @@ export async function purchaseTickets(
             .from(users)
             .where(eq(users.id, userId))
             .limit(1);
-          if (user && user.email) {
+          if (user && user.email && event) {
             // Group tickets by type for the email, including price (0 for free)
             const ticketsInfoForEmail = selectedTickets.reduce(
               (acc, { ticketType }) => {
@@ -449,16 +458,20 @@ export async function purchaseTickets(
               [] as Array<{ name: string; quantity: number; price?: number }>,
             );
 
+            // Format date using event's timezone
+            const formattedEventDate = formatInTimeZone(
+              event.startTimestamp, // The UTC date from DB
+              event.timezone, // The event's specific timezone (e.g., 'Asia/Bangkok')
+              "PPP 'at' h:mm a zzz", // Format string (includes timezone abbreviation like GMT+7)
+            );
+
             await sendEmail({
               to: user.email,
               subject: `Your Ticket Confirmation for ${event.title}`,
               html: ticketConfirmationTemplate({
                 userName: user.firstName || '',
                 eventName: event.title,
-                eventDate: format(
-                  new Date(event.startTimestamp),
-                  "PPP 'at' h:mm a",
-                ), // Format date
+                eventDate: formattedEventDate, // Use timezone-aware formatted date
                 ticketsInfo: ticketsInfoForEmail,
                 orderId: order.id,
                 eventUrl: `${env.FRONTEND_URL || 'http://localhost:3000'}/my-events/${event.id}`,
@@ -692,10 +705,12 @@ export async function handleSuccessfulPayment(
           .from(users)
           .where(eq(users.id, metadata.userId))
           .limit(1);
+        // Fetch event details including timezone
         const [event] = await tx
           .select({
             title: events.title,
             startTimestamp: events.startTimestamp,
+            timezone: events.timezone,
           })
           .from(events)
           .where(eq(events.id, metadata.eventId))
@@ -730,17 +745,21 @@ export async function handleSuccessfulPayment(
             [] as Array<{ name: string; quantity: number; price?: number }>,
           );
 
+          // Format date using event's timezone
+          const formattedEventDate = formatInTimeZone(
+            event.startTimestamp, // The UTC date from DB
+            event.timezone, // The event's specific timezone
+            "PPP 'at' h:mm a zzz", // Format string (includes timezone abbreviation)
+          );
+
           await sendEmail({
             to: user.email,
             subject: `Your Ticket Confirmation for ${event.title}`,
             html: ticketConfirmationTemplate({
               userName: user.firstName || '',
               eventName: event.title,
-              eventDate: format(
-                new Date(event.startTimestamp),
-                "PPP 'at' h:mm a",
-              ),
-              ticketsInfo: ticketsInfoForEmail, // Now includes price per type
+              eventDate: formattedEventDate, // Use timezone-aware formatted date
+              ticketsInfo: ticketsInfoForEmail,
               orderId: metadata.orderId,
               eventUrl: `${env.FRONTEND_URL || 'http://localhost:3000'}/my-events/${metadata.eventId}`,
               totalPrice: totalPrice,

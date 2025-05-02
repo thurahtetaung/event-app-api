@@ -18,6 +18,7 @@ const baseEventSchema = z.object({
   coverImage: z.string().optional(), // URL after upload
   organizationId: z.string().min(1, 'Organization ID is required'),
   status: z.enum(['draft', 'published', 'cancelled']).default('draft'),
+  timezone: z.string().optional(), // Add optional timezone field
 });
 
 export const eventSchema = baseEventSchema.refine(

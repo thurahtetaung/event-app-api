@@ -97,8 +97,9 @@ export const events = pgTable(
       .notNull()
       .references(() => organizations.id, { onDelete: 'cascade' }),
     status: eventStatusEnum().default('draft'),
-    createdAt: timestamp().defaultNow(),
-    updatedAt: timestamp().defaultNow(),
+    timezone: text('timezone').default('Asia/Bangkok').notNull(), // Add timezone column
+    createdAt: timestamp('created_at').defaultNow(),
+    updatedAt: timestamp('updated_at').defaultNow(),
   },
   (events) => [
     index().on(events.organizationId),

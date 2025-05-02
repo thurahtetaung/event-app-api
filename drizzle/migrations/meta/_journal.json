@@ -57,6 +57,13 @@
       "when": 1743009772008,
       "tag": "0007_nosy_mad_thinker",
       "breakpoints": false
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1746175386574,
+      "tag": "0008_cynical_ultron",
+      "breakpoints": false
     }
   ]
 }

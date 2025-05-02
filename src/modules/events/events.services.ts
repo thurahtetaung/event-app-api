@@ -130,6 +130,7 @@ export async function createEvent(data: EventSchema) {
       coverImage: data.coverImage,
       organizationId: data.organizationId,
       status: data.status,
+      timezone: data.timezone, // Include timezone if provided
     };
 
     logger.debug(`Inserting event with data: ${JSON.stringify(eventData)}`);
@@ -726,6 +727,7 @@ export async function updateEvent(
         endTimestamp: data.endTimestamp
           ? new Date(data.endTimestamp)
           : undefined,
+        timezone: data.timezone, // Include timezone in the update set
         updatedAt: new Date(),
       })
       .where(eq(events.id, id))
