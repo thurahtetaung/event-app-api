@@ -9,7 +9,7 @@ import {
   desc,
   countDistinct,
   lt,
-} from 'drizzle-orm'; // Removed inArray, extract
+} from 'drizzle-orm';
 import { db } from '../../db';
 import {
   users,
@@ -243,7 +243,7 @@ export async function getUserStats(id: string): Promise<UserStats> {
   } catch (error) {
     logger.error(`Error fetching stats for user ${id}: ${error}`);
     if (error instanceof NotFoundError) {
-      throw error; // Rethrow NotFoundError specifically
+      throw error;
     }
     // Throw a generic error for other issues
     throw new Error(`Failed to fetch user statistics for user ${id}`);
@@ -614,7 +614,7 @@ export async function getDashboardStats(): Promise<DashboardStats> {
     // Aggregate sales directly in the database
     const salesAggregation = await db
       .select({
-        // Sum prices (assuming they are in cents)
+        // Sum prices in cents
         totalSalesCents: sum(tickets.price).mapWith(Number),
         currentMonthSalesCents: sum(
           sql<number>`CASE WHEN ${orders.createdAt} >= ${currentMonthStart} AND ${orders.createdAt} <= ${now} THEN ${tickets.price} ELSE 0 END`,
@@ -624,8 +624,8 @@ export async function getDashboardStats(): Promise<DashboardStats> {
         ).mapWith(Number),
       })
       .from(orders)
-      .innerJoin(orderItems, eq(orders.id, orderItems.orderId)) // Use innerJoin as we only care about orders with items
-      .innerJoin(tickets, eq(orderItems.ticketId, tickets.id)) // Use innerJoin as we only care about items with tickets
+      .innerJoin(orderItems, eq(orders.id, orderItems.orderId))
+      .innerJoin(tickets, eq(orderItems.ticketId, tickets.id))
       .where(eq(orders.status, 'completed')); // Filter for completed orders
 
     const aggregatedSales = salesAggregation[0] || {
@@ -954,8 +954,6 @@ export async function getUserGrowthData(): Promise<UserGrowthData[]> {
     throw new Error(`Failed to fetch user growth data: ${error}`);
   }
 }
-
-// Define a temporary type for monthStat including totalCapacity - REMOVED as it's no longer needed here
 
 /**
  * Get event statistics for the past year (Optimized)

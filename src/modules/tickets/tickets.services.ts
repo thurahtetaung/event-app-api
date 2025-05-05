@@ -658,7 +658,7 @@ export async function handleSuccessfulPayment(
         throw new Error('Some selected tickets are no longer available');
       }
 
-      // IMPORTANT CHANGE: Check if order items already exist for these tickets
+      // Check if order items already exist for these tickets
       // to prevent duplicate entries
       const existingOrderItems = await tx
         .select({

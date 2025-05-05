@@ -7,12 +7,6 @@ import { eq } from 'drizzle-orm';
 import { logger } from '../utils/logger';
 import { UnauthorizedError, ForbiddenError } from '../utils/errors';
 
-interface JWTPayload {
-  sub: string;
-  email: string;
-  role: string;
-}
-
 declare module 'fastify' {
   interface FastifyRequest {
     user: typeof users.$inferSelect;
@@ -75,7 +69,10 @@ export function checkRole(roles: string[]) {
       }
     } catch (error) {
       logger.error(`Role check error: ${error}`);
-      if (error instanceof UnauthorizedError || error instanceof ForbiddenError) {
+      if (
+        error instanceof UnauthorizedError ||
+        error instanceof ForbiddenError
+      ) {
         throw error;
       }
       throw new ForbiddenError('Permission check failed');
