@@ -234,17 +234,24 @@ export const orders = pgTable(
   ],
 );
 
-export const orderItems = pgTable('order_items', {
-  id: uuid().primaryKey().defaultRandom(),
-  orderId: uuid()
-    .notNull()
-    .references(() => orders.id, { onDelete: 'cascade' }),
-  ticketId: uuid()
-    .notNull()
-    .references(() => tickets.id, { onDelete: 'cascade' }),
-  createdAt: timestamp().defaultNow(),
-  updatedAt: timestamp().defaultNow(),
-});
+export const orderItems = pgTable(
+  'order_items', 
+  {
+    id: uuid().primaryKey().defaultRandom(),
+    orderId: uuid()
+      .notNull()
+      .references(() => orders.id, { onDelete: 'cascade' }),
+    ticketId: uuid()
+      .notNull()
+      .references(() => tickets.id, { onDelete: 'cascade' }),
+    createdAt: timestamp().defaultNow(),
+    updatedAt: timestamp().defaultNow(),
+  },
+  // Add a unique constraint so the same ticket cannot be added to the same order twice
+  (orderItems) => [
+    unique().on(orderItems.orderId, orderItems.ticketId)
+  ]
+);
 
 export const platformConfigurationsEnum = pgEnum(
   'platform_configurations_keys',

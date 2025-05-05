@@ -1,12 +1,12 @@
-import { eq, InferInsertModel } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import { db } from '../../db';
 import {
   events,
   ticketTypes as dbTicketTypes,
-  users,
   organizations,
   tickets,
   categories,
+  platformConfigurations,
 } from '../../db/schema';
 import { logger } from '../../utils/logger';
 import { count, desc, gt, asc, gte, lte } from 'drizzle-orm';
@@ -16,7 +16,7 @@ import {
   ForbiddenError,
   ValidationError,
 } from '../../utils/errors';
-import { EventSchema, TicketTypeSchema } from './events.schema';
+import { EventSchema, TicketTypeSchema, EventAnalytics } from './events.schema';
 import { createTicketsForTicketType } from '../tickets/tickets.services';
 import { sql } from 'drizzle-orm';
 import { and } from 'drizzle-orm';
@@ -1080,9 +1080,38 @@ export async function updateTicketType(
   }
 }
 
-export async function getEventAnalytics(eventId: string) {
+export async function getEventAnalytics(
+  eventId: string,
+): Promise<EventAnalytics> {
   try {
     logger.info(`Getting analytics for event ${eventId}`);
+
+    // --- Fetch Platform Fee ---
+    let platformFeePercentage = 2.5; // Default value
+    try {
+      const feeConfig = await db
+        .select({ value: platformConfigurations.value })
+        .from(platformConfigurations)
+        .where(eq(platformConfigurations.key, 'platform_fee'))
+        .orderBy(desc(platformConfigurations.updatedAt))
+        .limit(1);
+
+      if (feeConfig.length > 0) {
+        platformFeePercentage = parseFloat(feeConfig[0].value);
+        logger.info(
+          `Using platform fee: ${platformFeePercentage}% for event ${eventId} analytics`,
+        );
+      } else {
+        logger.warn(
+          `Platform fee configuration not found for event ${eventId}, using default of 2.5%`,
+        );
+      }
+    } catch (feeError) {
+      logger.warn(
+        `Error fetching platform fee for event ${eventId}, using default of 2.5%: ${feeError}`,
+      );
+    }
+    const feeMultiplier = (100 - platformFeePercentage) / 100; // e.g., 0.975 for 2.5% fee
 
     // Get total tickets sold and revenue
     const [totals] = await db
@@ -1122,25 +1151,6 @@ export async function getEventAnalytics(eventId: string) {
       .where(eq(dbTicketTypes.eventId, eventId))
       .groupBy(dbTicketTypes.id);
 
-    // Log ticket type stats for debugging
-    logger.info(
-      `Ticket type stats for event ${eventId}: ${JSON.stringify(ticketTypesList, null, 2)}`,
-    );
-
-    // Double check booked tickets directly
-    const bookedTickets = await db
-      .select({
-        ticketTypeId: tickets.ticketTypeId,
-        count: sql<number>`CAST(COUNT(*) AS integer)`,
-      })
-      .from(tickets)
-      .where(and(eq(tickets.eventId, eventId), eq(tickets.status, 'booked')))
-      .groupBy(tickets.ticketTypeId);
-
-    logger.info(
-      `Booked tickets count for event ${eventId}: ${JSON.stringify(bookedTickets, null, 2)}`,
-    );
-
     // Get sales by day for all time
     const salesByDay = await db
       .select({
@@ -1153,18 +1163,26 @@ export async function getEventAnalytics(eventId: string) {
       .groupBy(sql`DATE(${tickets.bookedAt})`)
       .orderBy(sql`DATE(${tickets.bookedAt})`);
 
+    // Apply fee multiplier and convert cents to dollars
+    const finalTotalRevenue =
+      (Number(totals.totalRevenue) * feeMultiplier) / 100;
+
     return {
       totalTicketsSold: Number(totals.totalTicketsSold),
-      totalRevenue: Number(totals.totalRevenue) / 100, // Convert from cents to dollars
+      totalRevenue: finalTotalRevenue, // Use calculated value
       ticketTypeStats: ticketTypesList.map((stat) => ({
         ...stat,
         totalSold: Number(stat.totalSold),
-        totalRevenue: Number(stat.totalRevenue) / 100, // Convert from cents to dollars
+        // Apply fee multiplier before converting cents to dollars
+        totalRevenue: (Number(stat.totalRevenue) * feeMultiplier) / 100,
+        quantity: Number(stat.quantity), // Ensure quantity is number
+        status: stat.status, // Ensure status is correctly typed
       })),
       salesByDay: salesByDay.map((day) => ({
         ...day,
         count: Number(day.count),
-        revenue: Number(day.revenue) / 100, // Convert from cents to dollars
+        // Apply fee multiplier before converting cents to dollars
+        revenue: (Number(day.revenue) * feeMultiplier) / 100,
       })),
     };
   } catch (error) {

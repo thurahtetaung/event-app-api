@@ -8,6 +8,7 @@ export const pinoLogger = {
     'STRIPE_SECRET_KEY',
     'STRIPE_PUBLISHABLE_KEY',
     'STRIPE_WEBHOOK_SECRET',
+    'STRIPE_CONNECT_WEBHOOK_SECRET',
     'JWT_SECRET',
     'RESEND_API_KEY',
   ],

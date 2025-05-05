@@ -658,15 +658,44 @@ export async function handleSuccessfulPayment(
         throw new Error('Some selected tickets are no longer available');
       }
 
-      // Create order items for the specific tickets
-      await tx.insert(orderItems).values(
-        selectedTickets.map((ticket) => ({
+      // IMPORTANT CHANGE: Check if order items already exist for these tickets
+      // to prevent duplicate entries
+      const existingOrderItems = await tx
+        .select({
+          ticketId: orderItems.ticketId,
+          count: count(),
+        })
+        .from(orderItems)
+        .where(eq(orderItems.orderId, order.id))
+        .groupBy(orderItems.ticketId);
+
+      // Create a map for quick lookup
+      const existingTicketIds = new Map();
+      existingOrderItems.forEach((item) => {
+        existingTicketIds.set(item.ticketId, true);
+      });
+
+      // Only insert order items for tickets that don't already have an entry
+      const newOrderItems = selectedTickets
+        .filter((ticket) => !existingTicketIds.has(ticket.id))
+        .map((ticket) => ({
           orderId: order.id,
           ticketId: ticket.id,
           createdAt: new Date(),
           updatedAt: new Date(),
-        })),
-      );
+        }));
+
+      // Only insert if there are new items to add
+      if (newOrderItems.length > 0) {
+        logger.info(
+          `Adding ${newOrderItems.length} new order items that weren't already in the order`,
+        );
+        await tx.insert(orderItems).values(newOrderItems);
+      } else {
+        logger.info(
+          `All order items already exist for order ${order.id}, skipping insertion`,
+        );
+      }
 
       // Update ticket status to booked and generate access tokens
       await Promise.all(

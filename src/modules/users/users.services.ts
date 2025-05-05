@@ -17,6 +17,7 @@ import {
   NotFoundError,
   ValidationError,
   UnauthorizedError,
+  ForbiddenError,
 } from '../../utils/errors';
 import jwt from 'jsonwebtoken';
 
@@ -181,6 +182,7 @@ export async function loginUser(data: { email: string }) {
         email: users.email,
         verified: users.verified,
         role: users.role,
+        status: users.status, // Also select the user status
         supabaseUserId: users.supabaseUserId,
       })
       .from(users)
@@ -189,6 +191,19 @@ export async function loginUser(data: { email: string }) {
 
     if (user.length === 0) {
       throw new NotFoundError('User not found');
+    }
+
+    // Check if the user is inactive or banned
+    if (user[0].status === 'inactive' || user[0].status === 'banned') {
+      const statusMessage =
+        user[0].status === 'banned'
+          ? 'Your account has been suspended. Please contact support for assistance.'
+          : 'Your account is inactive. Please contact support to reactivate your account.';
+
+      logger.warn(
+        `Login attempt by ${data.email} blocked due to account status: ${user[0].status}`,
+      );
+      throw new ForbiddenError(statusMessage);
     }
 
     // Check if this is a seeded user (supabaseUserId starts with 'sb_')
@@ -232,6 +247,19 @@ export async function verifyLogin(data: { email: string; otp: string }) {
 
     if (user.length === 0) {
       throw new NotFoundError('User not found');
+    }
+
+    // Check if the user is inactive or banned
+    if (user[0].status === 'inactive' || user[0].status === 'banned') {
+      const statusMessage =
+        user[0].status === 'banned'
+          ? 'Your account has been suspended. Please contact support for assistance.'
+          : 'Your account is inactive. Please contact support to reactivate your account.';
+
+      logger.warn(
+        `Login verification attempt by ${data.email} blocked due to account status: ${user[0].status}`,
+      );
+      throw new ForbiddenError(statusMessage);
     }
 
     // Check if this is a seeded user (supabaseUserId starts with 'sb_')

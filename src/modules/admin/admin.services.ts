@@ -66,6 +66,13 @@ interface UserTransaction {
   amount: number;
   createdAt: string;
   status: string;
+  ticketCount: number;
+  paymentId?: string;
+  ticketTypes: {
+    name: string;
+    quantity: number;
+    unitPrice: number;
+  }[];
 }
 
 interface MonthlyUserStat {
@@ -205,15 +212,15 @@ export async function getUserStats(id: string): Promise<UserStats> {
         totalSpentCents: sum(
           sql<number>`CASE WHEN ${tickets.status} = 'booked' THEN COALESCE(${tickets.price}, 0) ELSE 0 END`,
         ).mapWith(Number),
+        // Use countDistinct to count unique events rather than individual tickets
         eventsAttended: countDistinct(
-          sql`CASE WHEN ${tickets.status} = 'booked' AND ${events.startTimestamp} < ${now} THEN ${tickets.eventId} ELSE NULL END`,
+          sql`CASE WHEN ${tickets.status} = 'booked' AND ${events.startTimestamp} < ${now} THEN ${events.id} ELSE NULL END`,
         ),
-        eventsUpcoming: count(
-          sql`CASE WHEN ${tickets.status} = 'booked' AND ${events.startTimestamp} >= ${now} THEN 1 ELSE NULL END`,
+        eventsUpcoming: countDistinct(
+          sql`CASE WHEN ${tickets.status} = 'booked' AND ${events.startTimestamp} >= ${now} THEN ${events.id} ELSE NULL END`,
         ),
-        // Assuming 'cancelled' or 'refunded' are possible statuses
-        eventsCancelled: count(
-          sql`CASE WHEN ${tickets.status} LIKE '%cancel%' OR ${tickets.status} LIKE '%refund%' THEN 1 ELSE NULL END`,
+        eventsCancelled: countDistinct(
+          sql`CASE WHEN (${tickets.status} LIKE '%cancel%') THEN ${events.id} ELSE NULL END`,
         ),
       })
       .from(tickets)
@@ -369,36 +376,86 @@ export async function getUserTransactions(
     // Check if user exists
     await getUserById(id);
 
-    // Query for user transactions (using orders table if exists, otherwise use tickets)
-    // Note: Depending on your schema, you might need to join with an orders table instead
-    const userTransactions = await db
+    // Query for user transactions from orders table
+    const userOrders = await db
       .select({
-        id: tickets.id,
+        id: orders.id,
+        eventId: orders.eventId,
         eventTitle: events.title,
-        amount: tickets.price,
-        createdAt: tickets.bookedAt,
-        status: tickets.status,
+        stripePaymentIntentId: orders.stripePaymentIntentId,
+        status: orders.status,
+        createdAt: orders.createdAt,
+        updatedAt: orders.updatedAt,
       })
-      .from(tickets)
-      .leftJoin(events, eq(tickets.eventId, events.id))
-      .where(eq(tickets.userId, id))
-      .orderBy(tickets.bookedAt);
+      .from(orders)
+      .leftJoin(events, eq(orders.eventId, events.id))
+      .where(eq(orders.userId, id))
+      .orderBy(desc(orders.createdAt));
 
-    // Format the data
-    return userTransactions
-      .filter((t) => t.createdAt !== null)
-      .map((transaction) => ({
-        id: transaction.id,
-        eventTitle: transaction.eventTitle || 'Unknown Event',
-        amount: (transaction.amount || 0) / 100, // Convert cents to dollars, added null check
-        createdAt: transaction.createdAt
-          ? transaction.createdAt.toISOString()
-          : new Date().toISOString(),
-        status:
-          transaction.status === 'booked'
-            ? 'completed'
-            : transaction.status || 'unknown', // Added null check for status
-      }));
+    // For each order, calculate the total amount and get ticket types
+    const ordersWithDetails = await Promise.all(
+      userOrders.map(async (order) => {
+        // Get all tickets in this order with their type information
+        const orderTicketsWithTypes = await db
+          .select({
+            ticketId: orderItems.ticketId,
+            ticketPrice: tickets.price,
+            ticketTypeId: tickets.ticketTypeId,
+            ticketTypeName: ticketTypes.name,
+          })
+          .from(orderItems)
+          .innerJoin(tickets, eq(orderItems.ticketId, tickets.id))
+          .innerJoin(ticketTypes, eq(tickets.ticketTypeId, ticketTypes.id))
+          .where(eq(orderItems.orderId, order.id));
+
+        // Calculate total amount for this order
+        const totalAmountCents = orderTicketsWithTypes.reduce(
+          (sum, item) => sum + Number(item.ticketPrice || 0),
+          0,
+        );
+
+        // Group tickets by ticket type
+        const ticketTypeMap = new Map<
+          string,
+          { name: string; quantity: number; unitPrice: number }
+        >();
+
+        orderTicketsWithTypes.forEach((ticket) => {
+          const typeKey = ticket.ticketTypeId;
+          if (!ticketTypeMap.has(typeKey)) {
+            ticketTypeMap.set(typeKey, {
+              name: ticket.ticketTypeName || 'Standard Ticket',
+              quantity: 1,
+              unitPrice: Number(ticket.ticketPrice || 0) / 100, // Convert cents to dollars
+            });
+          } else {
+            const currentType = ticketTypeMap.get(typeKey)!;
+            currentType.quantity += 1;
+          }
+        });
+
+        // Convert ticket type map to array
+        const ticketTypeArray = Array.from(ticketTypeMap.values());
+
+        // Get total ticket count
+        const ticketCount = orderTicketsWithTypes.length;
+
+        return {
+          id: order.id,
+          eventTitle: order.eventTitle || 'Unknown Event',
+          amount: totalAmountCents / 100, // Convert cents to dollars
+          createdAt: order.createdAt
+            ? order.createdAt.toISOString()
+            : new Date().toISOString(),
+          status: order.status || 'unknown',
+          ticketCount,
+          paymentId: order.stripePaymentIntentId || 'Free order',
+          ticketTypes: ticketTypeArray,
+        };
+      }),
+    );
+
+    return ordersWithDetails;
   } catch (error) {
     logger.error(`Error fetching transactions for user ${id}: ${error}`);
     throw error;

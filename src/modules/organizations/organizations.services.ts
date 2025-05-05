@@ -5,7 +5,7 @@ import {
   gte,
   sql,
   count,
-  sum,
+  // sum, <-- Removed unused import
   countDistinct,
 } from 'drizzle-orm';
 import { db } from '../../db';
@@ -14,6 +14,7 @@ import {
   events as eventsSchema,
   tickets as ticketsSchema,
   categories as categoriesSchema,
+  platformConfigurations,
 } from '../../db/schema';
 import { logger } from '../../utils/logger';
 import { AppError, NotFoundError, ForbiddenError } from '../../utils/errors';
@@ -186,6 +187,30 @@ export async function getOrganizationAnalytics(
     // Ensure the organization exists (using the existing function)
     await getOrganizationById(organizationId);
 
+    // --- Fetch Platform Fee ---
+    let platformFeePercentage = 2.5; // Default value
+    try {
+      const feeConfig = await db
+        .select({ value: platformConfigurations.value })
+        .from(platformConfigurations)
+        .where(eq(platformConfigurations.key, 'platform_fee'))
+        .orderBy(desc(platformConfigurations.updatedAt))
+        .limit(1);
+
+      if (feeConfig.length > 0) {
+        platformFeePercentage = parseFloat(feeConfig[0].value);
+      } else {
+        logger.warn(
+          'Platform fee configuration not found, using default of 2.5%',
+        );
+      }
+    } catch (feeError) {
+      logger.warn(
+        `Error fetching platform fee, using default of 2.5%: ${feeError}`,
+      );
+    }
+    const feeMultiplier = (100 - platformFeePercentage) / 100; // e.g., 0.975 for 2.5% fee
+
     // Use aliased schemas
     const events = eventsSchema;
     const tickets = ticketsSchema;
@@ -227,9 +252,8 @@ export async function getOrganizationAnalytics(
       .select({
         // All-time
         totalAttendees: count(tickets.id).mapWith(Number), // Count booked tickets
-        totalRevenue: sum(sql<number>`COALESCE(${tickets.price}, 0)`).mapWith(
-          Number,
-        ), // Sum price of booked tickets
+        // Fetch raw SUM in cents as number
+        totalRevenueRaw: sql<number>`COALESCE(SUM(COALESCE(${tickets.price}, 0)), 0)`,
         // Period changes (Tickets/Revenue)
         currentPeriodTickets: count(
           sql`CASE WHEN ${tickets.bookedAt} >= ${currentPeriodStart} AND ${tickets.bookedAt} <= ${currentPeriodEnd} THEN 1 ELSE NULL END`,
@@ -237,12 +261,10 @@ export async function getOrganizationAnalytics(
         previousPeriodTickets: count(
           sql`CASE WHEN ${tickets.bookedAt} >= ${previousPeriodStart} AND ${tickets.bookedAt} <= ${previousPeriodEnd} THEN 1 ELSE NULL END`,
         ).mapWith(Number),
-        currentPeriodRevenue: sum(
-          sql<number>`CASE WHEN ${tickets.bookedAt} >= ${currentPeriodStart} AND ${tickets.bookedAt} <= ${currentPeriodEnd} THEN COALESCE(${tickets.price}, 0) ELSE 0 END`,
-        ).mapWith(Number),
-        previousPeriodRevenue: sum(
-          sql<number>`CASE WHEN ${tickets.bookedAt} >= ${previousPeriodStart} AND ${tickets.bookedAt} <= ${previousPeriodEnd} THEN COALESCE(${tickets.price}, 0) ELSE 0 END`,
-        ).mapWith(Number),
+        // Fetch raw SUM in cents as number
+        currentPeriodRevenueRaw: sql<number>`COALESCE(SUM(CASE WHEN ${tickets.bookedAt} >= ${currentPeriodStart} AND ${tickets.bookedAt} <= ${currentPeriodEnd} THEN COALESCE(${tickets.price}, 0) ELSE 0 END), 0)`,
+        // Fetch raw SUM in cents as number
+        previousPeriodRevenueRaw: sql<number>`COALESCE(SUM(CASE WHEN ${tickets.bookedAt} >= ${previousPeriodStart} AND ${tickets.bookedAt} <= ${previousPeriodEnd} THEN COALESCE(${tickets.price}, 0) ELSE 0 END), 0)`,
       })
       .from(tickets)
       .innerJoin(events, eq(tickets.eventId, events.id))
@@ -260,12 +282,22 @@ export async function getOrganizationAnalytics(
     const currentEventCount = combinedStats[0]?.currentPeriodEvents || 0;
     const previousEventCount = combinedStats[0]?.previousPeriodEvents || 0;
 
-    const allTimeAttendeeCount = ticketStats[0]?.totalAttendees || 0;
-    const allTimeRevenue = ticketStats[0]?.totalRevenue || 0;
-    const currentTicketsSold = ticketStats[0]?.currentPeriodTickets || 0;
-    const previousTicketsSold = ticketStats[0]?.previousPeriodTickets || 0;
-    const currentRevenue = ticketStats[0]?.currentPeriodRevenue || 0;
-    const previousRevenue = ticketStats[0]?.previousPeriodRevenue || 0;
+    const allTimeAttendeeCount = Number(ticketStats[0]?.totalAttendees) || 0;
+    // Apply fee multiplier in TypeScript, ensuring raw value is number
+    const allTimeRevenueRaw = Number(ticketStats[0]?.totalRevenueRaw) || 0;
+    const allTimeRevenue = allTimeRevenueRaw * feeMultiplier;
+    const currentTicketsSold =
+      Number(ticketStats[0]?.currentPeriodTickets) || 0;
+    const previousTicketsSold =
+      Number(ticketStats[0]?.previousPeriodTickets) || 0;
+    // Apply fee multiplier in TypeScript, ensuring raw value is number
+    const currentRevenueRaw =
+      Number(ticketStats[0]?.currentPeriodRevenueRaw) || 0;
+    const currentRevenue = currentRevenueRaw * feeMultiplier;
+    // Apply fee multiplier in TypeScript, ensuring raw value is number
+    const previousRevenueRaw =
+      Number(ticketStats[0]?.previousPeriodRevenueRaw) || 0;
+    const previousRevenue = previousRevenueRaw * feeMultiplier;
 
     // Calculate percentage changes
     const calculatePercentageChange = (
@@ -286,8 +318,8 @@ export async function getOrganizationAnalytics(
       previousTicketsSold,
     );
     const revenueChange = calculatePercentageChange(
-      currentRevenue,
-      previousRevenue,
+      currentRevenue, // Use fee-adjusted revenue
+      previousRevenue, // Use fee-adjusted revenue
     );
     const ticketsChange = attendeesChange; // Tickets sold change is same as attendees change
 
@@ -299,7 +331,8 @@ export async function getOrganizationAnalytics(
         startTimestamp: events.startTimestamp,
         status: events.status, // Keep status as is from DB
         ticketsSold: sql<number>`CAST(COUNT(CASE WHEN ${tickets.status} = 'booked' THEN 1 END) AS integer)`,
-        revenue: sql<number>`COALESCE(SUM(CASE WHEN ${tickets.status} = 'booked' THEN ${tickets.price} END), 0)`,
+        // Fetch raw SUM in cents as number
+        revenueRaw: sql<number>`COALESCE(SUM(CASE WHEN ${tickets.status} = 'booked' THEN ${tickets.price} END), 0)`,
       })
       .from(events)
       .leftJoin(tickets, eq(tickets.eventId, events.id))
@@ -308,17 +341,22 @@ export async function getOrganizationAnalytics(
       .orderBy(desc(events.createdAt))
       .limit(5);
 
-    // Filter out events with null status and map
+    // Filter out events with null status and map, applying fee multiplier
     const recentEvents = recentEventsRaw
       .filter((event) => event.status !== null)
-      .map((event) => ({
-        id: event.id,
-        title: event.title,
-        startTimestamp: event.startTimestamp.toISOString(), // Convert Date to string
-        status: event.status as 'draft' | 'published' | 'cancelled', // Assert type after filtering null
-        ticketsSold: Number(event.ticketsSold),
-        revenue: Number(event.revenue) / 100,
-      }));
+      .map((event) => {
+        // Ensure raw value is number before applying multiplier
+        const revenueRaw = Number(event.revenueRaw) || 0;
+        const revenueWithFee = revenueRaw * feeMultiplier;
+        return {
+          id: event.id,
+          title: event.title,
+          startTimestamp: event.startTimestamp.toISOString(), // Convert Date to string
+          status: event.status as 'draft' | 'published' | 'cancelled', // Assert type after filtering null
+          ticketsSold: Number(event.ticketsSold),
+          revenue: revenueWithFee / 100, // Convert fee-adjusted cents to dollars
+        };
+      });
 
     // --- Events By Category (Keep as is) ---
     const eventsByCategory = await db
@@ -332,11 +370,12 @@ export async function getOrganizationAnalytics(
       .groupBy(categories.name)
       .orderBy(desc(count(events.id)));
 
-    // --- Monthly Trends (queries remain the same) ---
+    // --- Monthly Trends ---
     const revenueByMonthQuery = await db
       .select({
         month: sql<string>`TO_CHAR(${tickets.bookedAt}, 'YYYY-MM')`,
-        value: sum(sql<number>`COALESCE(${tickets.price}, 0)`).mapWith(Number), // Use 'value' alias
+        // Fetch raw SUM in cents as number
+        valueRaw: sql<number>`COALESCE(SUM(COALESCE(${tickets.price}, 0)), 0)`,
       })
       .from(tickets)
       .innerJoin(events, eq(tickets.eventId, events.id))
@@ -367,20 +406,39 @@ export async function getOrganizationAnalytics(
       .groupBy(sql`TO_CHAR(${tickets.bookedAt}, 'YYYY-MM')`)
       .orderBy(sql`TO_CHAR(${tickets.bookedAt}, 'YYYY-MM')`);
 
+    // Apply fee multiplier to monthly revenue data before formatting
+    // Explicitly cast valueRaw to number before applying multiplier
+    const revenueByMonthWithFee = revenueByMonthQuery.map((item) => {
+      const valueRaw = Number(item.valueRaw) || 0;
+      return {
+        month: item.month,
+        value: valueRaw * feeMultiplier, // Apply fee here
+      };
+    });
+
     // Format monthly data using the helper
-    const formattedRevenue = formatMonthlyData(revenueByMonthQuery, 100); // Divide by 100 for dollars
-    const formattedTicketSales = formatMonthlyData(ticketSalesByMonthQuery);
+    const formattedRevenue = formatMonthlyData(
+      revenueByMonthWithFee,
+      100, // Divide by 100 for dollars (value is fee-adjusted cents)
+    );
+    // Pass the correct variable to formatMonthlyData
+    const formattedTicketSales = formatMonthlyData(
+      ticketSalesByMonthQuery.map((item) => ({
+        ...item,
+        value: Number(item.value),
+      })),
+    );
 
     // Format the final response
     const analytics: OrganizationAnalytics = {
       totalEvents: allTimeEventCount,
       totalAttendees: allTimeAttendeeCount,
-      totalRevenue: allTimeRevenue / 100, // Convert cents to dollars
+      totalRevenue: allTimeRevenue / 100, // Convert fee-adjusted cents to dollars
       ticketsSold: allTimeAttendeeCount, // ticketsSold is same as totalAttendees
       periodChanges: {
         eventsChange: eventsChange,
         attendeesChange: attendeesChange,
-        revenueChange: revenueChange, // Based on cents, conversion happens at final display if needed
+        revenueChange: revenueChange, // Based on fee-adjusted cents
         ticketsChange: ticketsChange,
       },
       recentEvents: recentEvents, // Use the filtered and mapped array
@@ -391,7 +449,7 @@ export async function getOrganizationAnalytics(
       // Map the helper function result to the expected schema structure
       revenueByMonth: formattedRevenue.map((item) => ({
         month: item.month,
-        revenue: item.value,
+        revenue: item.value, // Value is already fee-adjusted dollars
       })),
       ticketSalesByMonth: formattedTicketSales.map((item) => ({
         month: item.month,

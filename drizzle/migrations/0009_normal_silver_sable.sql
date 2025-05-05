@@ -1,0 +1,1 @@
+ALTER TABLE "order_items" ADD CONSTRAINT "order_items_orderId_ticketId_unique" UNIQUE("order_id","ticket_id");

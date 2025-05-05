@@ -64,6 +64,13 @@
       "when": 1746175386574,
       "tag": "0008_cynical_ultron",
       "breakpoints": false
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1746441559123,
+      "tag": "0009_normal_silver_sable",
+      "breakpoints": false
     }
   ]
 }
