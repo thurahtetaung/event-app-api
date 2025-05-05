@@ -1,4 +1,15 @@
-import { eq, inArray, and, gte, lte, count, sql } from 'drizzle-orm';
+import {
+  eq,
+  and,
+  gte,
+  lte,
+  count,
+  sql,
+  sum,
+  desc,
+  countDistinct,
+  lt,
+} from 'drizzle-orm'; // Removed inArray, extract
 import { db } from '../../db';
 import {
   users,
@@ -24,12 +35,6 @@ import {
 
 // Use inferred types from schema
 type User = typeof users.$inferSelect;
-type Event = typeof events.$inferSelect;
-type Ticket = typeof tickets.$inferSelect;
-type TicketType = typeof ticketTypes.$inferSelect;
-type Order = typeof orders.$inferSelect;
-type OrderItem = typeof orderItems.$inferSelect;
-type PlatformConfiguration = typeof platformConfigurations.$inferSelect;
 
 // Define interfaces for function return types
 interface UserStats {
@@ -109,12 +114,6 @@ interface EventStatistics {
   eventOccupancyRate: number;
 }
 
-// Define a type for the ticket object when calculating sales
-// Extend the inferred Ticket type
-interface TicketWithOrderDate extends Ticket {
-  orderCreatedAt?: Date | null;
-}
-
 // Admin user management functions
 export async function getAllUsers(): Promise<User[]> {
   try {
@@ -192,72 +191,55 @@ export async function deleteUser(id: string): Promise<boolean> {
   }
 }
 
-// Function to get user statistics
+// Function to get user statistics (Optimized)
 export async function getUserStats(id: string): Promise<UserStats> {
   try {
-    // Check if user exists
+    // Check if user exists first to ensure ID is valid
     await getUserById(id);
 
-    // Query for tickets purchased by the user with event information
-    const userTickets = await db
+    const now = new Date();
+
+    // Use a single query with conditional aggregation
+    const statsResult = await db
       .select({
-        ticketId: tickets.id,
-        price: tickets.price,
-        status: tickets.status,
-        eventId: tickets.eventId,
-        startTimestamp: events.startTimestamp,
+        totalSpentCents: sum(
+          sql<number>`CASE WHEN ${tickets.status} = 'booked' THEN COALESCE(${tickets.price}, 0) ELSE 0 END`,
+        ).mapWith(Number),
+        eventsAttended: countDistinct(
+          sql`CASE WHEN ${tickets.status} = 'booked' AND ${events.startTimestamp} < ${now} THEN ${tickets.eventId} ELSE NULL END`,
+        ),
+        eventsUpcoming: count(
+          sql`CASE WHEN ${tickets.status} = 'booked' AND ${events.startTimestamp} >= ${now} THEN 1 ELSE NULL END`,
+        ),
+        // Assuming 'cancelled' or 'refunded' are possible statuses
+        eventsCancelled: count(
+          sql`CASE WHEN ${tickets.status} LIKE '%cancel%' OR ${tickets.status} LIKE '%refund%' THEN 1 ELSE NULL END`,
+        ),
       })
       .from(tickets)
       .leftJoin(events, eq(tickets.eventId, events.id))
       .where(eq(tickets.userId, id));
 
-    // Calculate total spent (converting cents to dollars)
-    const totalSpent =
-      userTickets
-        .filter((ticket) => ticket.status === 'booked')
-        .reduce((sum, ticket) => sum + (ticket.price || 0), 0) / 100; // Added null check for price
-
-    // Get the current date
-    const now = new Date();
-
-    // Filter tickets for booked events that have already started
-    const attendedTickets = userTickets.filter(
-      (ticket) =>
-        ticket.status === 'booked' &&
-        ticket.startTimestamp &&
-        new Date(ticket.startTimestamp) < now,
-    );
-
-    // Count unique attended events using a Set
-    const attendedEventIds = new Set(
-      attendedTickets.map((ticket) => ticket.eventId),
-    );
-    const eventsAttended = attendedEventIds.size;
-
-    // Events are considered "upcoming" if they are booked and their start date is in the future
-    const eventsUpcoming = userTickets.filter(
-      (ticket) =>
-        ticket.status === 'booked' &&
-        ticket.startTimestamp &&
-        new Date(ticket.startTimestamp) >= now,
-    ).length;
-
-    // Check if status includes any cancellation-related values
-    const eventsCancelled = userTickets.filter(
-      (ticket) =>
-        typeof ticket.status === 'string' &&
-        (ticket.status.includes('cancel') || ticket.status.includes('refund')),
-    ).length;
+    const stats = statsResult[0] || {
+      totalSpentCents: 0,
+      eventsAttended: 0,
+      eventsUpcoming: 0,
+      eventsCancelled: 0,
+    };
 
     return {
-      totalSpent,
-      eventsAttended,
-      eventsUpcoming,
-      eventsCancelled,
+      totalSpent: (stats.totalSpentCents || 0) / 100, // Convert cents to dollars
+      eventsAttended: stats.eventsAttended || 0,
+      eventsUpcoming: stats.eventsUpcoming || 0,
+      eventsCancelled: stats.eventsCancelled || 0,
     };
   } catch (error) {
     logger.error(`Error fetching stats for user ${id}: ${error}`);
-    throw error;
+    if (error instanceof NotFoundError) {
+      throw error; // Rethrow NotFoundError specifically
+    }
+    // Throw a generic error for other issues
+    throw new Error(`Failed to fetch user statistics for user ${id}`);
   }
 }
 
@@ -423,47 +405,38 @@ export async function getUserTransactions(
   }
 }
 
-// Get monthly user registration statistics for the past 6 months
+// Get monthly user registration statistics for the past 6 months (Optimized)
 export async function getMonthlyUserStats(): Promise<{
   data: MonthlyUserStat[];
 }> {
   try {
-    // Get all users with their creation dates
-    const allUsers = await db.select().from(users);
+    logger.info('Fetching monthly user registration statistics');
+    const sixMonthsAgo = new Date();
+    sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 5); // Go back 5 months to include the current month
+    sixMonthsAgo.setDate(1); // Start from the 1st day of that month
+    sixMonthsAgo.setHours(0, 0, 0, 0);
 
-    // Create a map to hold monthly counts
-    const monthlyCounts = new Map<string, number>();
+    // Use sql template literal for date extraction
+    const yearCol = sql<number>`EXTRACT(YEAR FROM ${users.createdAt})`.as(
+      'year',
+    );
+    const monthCol = sql<number>`EXTRACT(MONTH FROM ${users.createdAt})`.as(
+      'month',
+    );
+    const userCountCol = count(users.id).mapWith(Number).as('count');
 
-    // Get the current date
-    const now = new Date();
+    const monthlyCounts = await db
+      .select({
+        year: yearCol,
+        month: monthCol,
+        count: userCountCol,
+      })
+      .from(users)
+      .where(gte(users.createdAt, sixMonthsAgo)) // Filter users created in the last 6 months
+      .groupBy(yearCol, monthCol)
+      .orderBy(yearCol, monthCol);
 
-    // Initialize the last 6 months with zero counts
-    for (let i = 5; i >= 0; i--) {
-      const month = new Date(now.getFullYear(), now.getMonth() - i, 1);
-      const monthKey = `${month.getFullYear()}-${String(month.getMonth() + 1).padStart(2, '0')}`;
-      monthlyCounts.set(monthKey, 0);
-    }
-
-    // Count users registered in each month
-    for (const user of allUsers) {
-      if (user.createdAt) {
-        const createdAt = new Date(user.createdAt);
-        // Check if the user was created in the last 6 months
-        const monthDiff =
-          (now.getFullYear() - createdAt.getFullYear()) * 12 +
-          now.getMonth() -
-          createdAt.getMonth();
-
-        if (monthDiff >= 0 && monthDiff < 6) {
-          const monthKey = `${createdAt.getFullYear()}-${String(createdAt.getMonth() + 1).padStart(2, '0')}`;
-          const currentCount = monthlyCounts.get(monthKey) || 0;
-          monthlyCounts.set(monthKey, currentCount + 1);
-        }
-      }
-    }
-
-    // Convert the map to an array of {month, total} objects
-    // Format: month: "Jan", total: 123
+    // Format the result
     const monthNames = [
       'Jan',
       'Feb',
@@ -478,24 +451,42 @@ export async function getMonthlyUserStats(): Promise<{
       'Nov',
       'Dec',
     ];
-    const result = Array.from(monthlyCounts.entries())
-      .sort((a, b) => a[0].localeCompare(b[0])) // Sort by year-month
-      .map(([key, count]) => {
-        const [, month] = key.split('-').map(Number); // Year is unused, only need month index
-        return {
-          month: monthNames[month - 1],
-          total: count,
-        };
-      });
 
+    // Create a map for the last 6 months to ensure all months are present
+    const resultDataMap = new Map<string, MonthlyUserStat>();
+    const now = new Date();
+    for (let i = 5; i >= 0; i--) {
+      const date = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      const year = date.getFullYear();
+      const monthIndex = date.getMonth(); // 0-based
+      const monthKey = `${year}-${monthIndex + 1}`;
+      resultDataMap.set(monthKey, {
+        month: monthNames[monthIndex],
+        total: 0,
+      });
+    }
+
+    // Populate the map with actual counts
+    monthlyCounts.forEach((row) => {
+      const monthKey = `${row.year}-${row.month}`;
+      if (resultDataMap.has(monthKey)) {
+        resultDataMap.get(monthKey)!.total = row.count;
+      }
+    });
+
+    const result = Array.from(resultDataMap.values());
+
+    logger.info(
+      `Successfully fetched monthly user stats: ${result.length} months`,
+    );
     return { data: result };
   } catch (error) {
     logger.error(`Error fetching monthly user stats: ${error}`);
-    throw error;
+    throw new Error('Failed to fetch monthly user statistics'); // Generic error
   }
 }
 
-// Update getDashboardStats to use real platform fee data and get revenue from completed orders
+// Optimized getDashboardStats using database aggregation
 export async function getDashboardStats(): Promise<DashboardStats> {
   try {
     // First, try to get from cache
@@ -509,33 +500,22 @@ export async function getDashboardStats(): Promise<DashboardStats> {
       'Dashboard stats not found in cache, fetching from database...',
     );
 
-    // Get user statistics
-    const allUsers = await db.select().from(users);
-    const totalUsers = allUsers.length;
+    // --- User Statistics ---
+    const userStats = await db
+      .select({
+        totalUsers: count(users.id),
+        // Use SQL for date comparison for better performance
+        newUsers: count(
+          sql`CASE WHEN ${users.createdAt} > date_trunc('month', current_date) THEN 1 ELSE NULL END`,
+        ),
+      })
+      .from(users);
 
-    // Get date ranges for current month and previous month
-    const now = new Date();
-
-    // Get the current calendar month (1st day of current month to today)
-    const currentMonthStart = new Date(now.getFullYear(), now.getMonth(), 1); // 1st day of current month
-
-    // Get previous calendar month (1st day to last day of previous month)
-    const previousMonthStart = new Date(
-      now.getFullYear(),
-      now.getMonth() - 1,
-      1,
-    ); // 1st day of previous month
-    const previousMonthEnd = new Date(now.getFullYear(), now.getMonth(), 0); // Last day of previous month
-
-    // Count users who registered in the last month
-    const newUsers = allUsers.filter(
-      (user) => user.createdAt && new Date(user.createdAt) > currentMonthStart,
-    ).length;
-
-    // Calculate growth rate (simplified)
+    const totalUsers = userStats[0]?.totalUsers || 0;
+    const newUsers = userStats[0]?.newUsers || 0;
     const growthRate = totalUsers > 0 ? (newUsers / totalUsers) * 100 : 0;
 
-    // First, get the platform fee to calculate revenue
+    // --- Platform Fee ---
     let platformFeePercentage = 2.5; // Default value
     let platformFeeLastChanged = new Date(
       Date.now() - 30 * 24 * 60 * 60 * 1000,
@@ -546,128 +526,63 @@ export async function getDashboardStats(): Promise<DashboardStats> {
         .select()
         .from(platformConfigurations)
         .where(eq(platformConfigurations.key, 'platform_fee'))
+        .orderBy(desc(platformConfigurations.updatedAt)) // Get the latest config
         .limit(1);
 
       if (configs.length > 0) {
-        // Log the raw value from database for debugging
-        logger.info(`Raw platform fee from database: "${configs[0].value}"`);
-
-        // Value is stored as a string, parse to get the percentage
         platformFeePercentage = parseFloat(configs[0].value);
-        logger.info(`Parsed platform fee: ${platformFeePercentage}`);
-
-        // Handle the updatedAt timestamp - convert to ISO string if it exists
         if (configs[0].updatedAt) {
-          // updatedAt is a Date object from the database timestamp field
           platformFeeLastChanged = configs[0].updatedAt.toISOString();
         }
+        logger.info(
+          `Using platform fee: ${platformFeePercentage}% (last changed: ${platformFeeLastChanged})`,
+        );
+      } else {
+        logger.warn('Platform fee configuration not found, using default.');
       }
     } catch (feeError) {
-      // Use the error variable
       logger.warn(`Using default platform fee due to error: ${feeError}`);
     }
 
-    // Get all completed orders
-    const completedOrders = await db
+    // --- Revenue Statistics (Optimized using DB Aggregation) ---
+    const now = new Date();
+    const currentMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    const previousMonthStart = new Date(
+      now.getFullYear(),
+      now.getMonth() - 1,
+      1,
+    );
+    const previousMonthEnd = new Date(now.getFullYear(), now.getMonth(), 0); // Last day of previous month
+
+    // Aggregate sales directly in the database
+    const salesAggregation = await db
       .select({
-        id: orders.id,
-        status: orders.status,
-        createdAt: orders.createdAt,
+        // Sum prices (assuming they are in cents)
+        totalSalesCents: sum(tickets.price).mapWith(Number),
+        currentMonthSalesCents: sum(
+          sql<number>`CASE WHEN ${orders.createdAt} >= ${currentMonthStart} AND ${orders.createdAt} <= ${now} THEN ${tickets.price} ELSE 0 END`,
+        ).mapWith(Number),
+        previousMonthSalesCents: sum(
+          sql<number>`CASE WHEN ${orders.createdAt} >= ${previousMonthStart} AND ${orders.createdAt} <= ${previousMonthEnd} THEN ${tickets.price} ELSE 0 END`,
+        ).mapWith(Number),
       })
       .from(orders)
-      .where(eq(orders.status, 'completed'));
+      .innerJoin(orderItems, eq(orders.id, orderItems.orderId)) // Use innerJoin as we only care about orders with items
+      .innerJoin(tickets, eq(orderItems.ticketId, tickets.id)) // Use innerJoin as we only care about items with tickets
+      .where(eq(orders.status, 'completed')); // Filter for completed orders
 
-    // Log a summary of completed orders instead of individual details
-    logger.info(`Found ${completedOrders.length} completed orders`);
+    const aggregatedSales = salesAggregation[0] || {
+      totalSalesCents: 0,
+      currentMonthSalesCents: 0,
+      previousMonthSalesCents: 0,
+    };
 
-    // Initialize revenue variables
-    let totalSales = 0;
-    let currentMonthSales = 0;
-    let previousMonthSales = 0;
-
-    // Use a Map to ensure we count each ticket only once
-    const uniqueTickets = new Map<string, TicketWithOrderDate>();
-
-    if (completedOrders.length > 0) {
-      // Process order IDs in batches to avoid exceeding parameter limits
-      const orderIds = completedOrders.map((order) => order.id);
-      const BATCH_SIZE = 1000; // Process 1000 orders at a time
-
-      for (let i = 0; i < orderIds.length; i += BATCH_SIZE) {
-        const batchOrderIds = orderIds.slice(i, i + BATCH_SIZE);
-
-        // Get order items with tickets for this batch of orders
-        const orderItemsWithTickets = await db
-          .select({
-            orderItem: orderItems,
-            ticket: tickets,
-            order: orders,
-          })
-          .from(orderItems)
-          .leftJoin(tickets, eq(orderItems.ticketId, tickets.id))
-          .leftJoin(orders, eq(orderItems.orderId, orders.id))
-          .where(inArray(orderItems.orderId, batchOrderIds));
-
-        // Process each ticket in this batch
-        orderItemsWithTickets.forEach((item) => {
-          if (
-            item.ticket &&
-            item.ticket.id &&
-            !uniqueTickets.has(item.ticket.id) &&
-            item.order
-          ) {
-            // Store the order creation date with the ticket for time-based filtering
-            uniqueTickets.set(item.ticket.id, {
-              ...item.ticket,
-              orderCreatedAt: item.order.createdAt,
-            });
-          }
-        });
-      }
-
-      // Calculate total sales from all tickets
-      totalSales = Array.from(uniqueTickets.values()).reduce(
-        (sum: number, ticketWithDate: TicketWithOrderDate) => {
-          // Access price directly from the extended Ticket type
-          return sum + (ticketWithDate?.price || 0) / 100; // Convert from cents to dollars
-        },
-        0,
-      );
-
-      // Calculate sales for current month (last 30 days)
-      currentMonthSales = Array.from(uniqueTickets.values()).reduce(
-        (sum: number, ticketWithDate: TicketWithOrderDate) => {
-          if (
-            ticketWithDate &&
-            ticketWithDate.orderCreatedAt &&
-            new Date(ticketWithDate.orderCreatedAt) >= currentMonthStart &&
-            new Date(ticketWithDate.orderCreatedAt) <= now
-          ) {
-            // Access price directly
-            return sum + (ticketWithDate?.price || 0) / 100;
-          }
-          return sum;
-        },
-        0,
-      );
-
-      // Calculate sales for previous month (30-60 days ago)
-      previousMonthSales = Array.from(uniqueTickets.values()).reduce(
-        (sum: number, ticketWithDate: TicketWithOrderDate) => {
-          if (
-            ticketWithDate &&
-            ticketWithDate.orderCreatedAt &&
-            new Date(ticketWithDate.orderCreatedAt) >= previousMonthStart &&
-            new Date(ticketWithDate.orderCreatedAt) <= previousMonthEnd
-          ) {
-            // Access price directly
-            return sum + (ticketWithDate?.price || 0) / 100;
-          }
-          return sum;
-        },
-        0,
-      );
-    }
+    // Convert cents to dollars
+    const totalSales = (aggregatedSales.totalSalesCents || 0) / 100;
+    const currentMonthSales =
+      (aggregatedSales.currentMonthSalesCents || 0) / 100;
+    const previousMonthSales =
+      (aggregatedSales.previousMonthSalesCents || 0) / 100;
 
     // Calculate platform's revenue from sales
     const totalRevenue = (totalSales * platformFeePercentage) / 100;
@@ -676,23 +591,22 @@ export async function getDashboardStats(): Promise<DashboardStats> {
     const previousMonthRevenue =
       (previousMonthSales * platformFeePercentage) / 100;
 
-    // Calculate the correct revenue growth rate comparing current month to previous month
+    // Calculate revenue growth rate
     let revenueGrowthRate = 0;
     if (previousMonthRevenue > 0) {
       revenueGrowthRate =
         ((currentMonthRevenue - previousMonthRevenue) / previousMonthRevenue) *
         100;
     } else if (currentMonthRevenue > 0) {
-      revenueGrowthRate = 100; // 100% growth if previous month was zero
+      revenueGrowthRate = 100; // Growth is 100% if previous was zero and current is positive
     }
 
-    // Log for debugging
     logger.info(`Total Platform Revenue: $${totalRevenue.toFixed(2)}`);
     logger.info(`Current Month Revenue: $${currentMonthRevenue.toFixed(2)}`);
     logger.info(`Previous Month Revenue: $${previousMonthRevenue.toFixed(2)}`);
     logger.info(`Revenue Growth Rate: ${revenueGrowthRate.toFixed(2)}%`);
 
-    // Create the final response object
+    // --- Construct Response ---
     const response: DashboardStats = {
       users: {
         total: totalUsers,
@@ -719,12 +633,16 @@ export async function getDashboardStats(): Promise<DashboardStats> {
     return response;
   } catch (error) {
     logger.error(`Error fetching dashboard stats: ${error}`);
-    throw error;
+    // Ensure a specific error type or rethrow
+    if (error instanceof Error) {
+      logger.error(`Stack trace: ${error.stack}`);
+    }
+    throw new Error(`Failed to fetch dashboard stats: ${error}`);
   }
 }
 
 /**
- * Get monthly revenue data for the past year
+ * Get monthly revenue data for the past year (Optimized)
  */
 export async function getMonthlyRevenueData(): Promise<MonthlyRevenueData[]> {
   try {
@@ -753,105 +671,117 @@ export async function getMonthlyRevenueData(): Promise<MonthlyRevenueData[]> {
         .select()
         .from(platformConfigurations)
         .where(eq(platformConfigurations.key, 'platform_fee'))
+        .orderBy(desc(platformConfigurations.updatedAt))
         .limit(1);
 
       if (configs.length > 0) {
         platformFeePercentage = parseFloat(configs[0].value);
       }
     } catch (feeError) {
-      // Use the error variable
       logger.warn(`Using default platform fee due to error: ${feeError}`);
     }
 
-    // Get all completed orders in the date range
-    const completedOrders = await db
-      .select()
+    // Define columns for extraction and aggregation
+    const yearCol = sql<number>`EXTRACT(YEAR FROM ${orders.createdAt})`.as(
+      'year',
+    );
+    const monthCol = sql<number>`EXTRACT(MONTH FROM ${orders.createdAt})`.as(
+      'month',
+    );
+    const totalSalesCol = sum(sql<number>`COALESCE(${tickets.price}, 0)`)
+      .mapWith(Number)
+      .as('total_sales_cents');
+    const ticketsSoldCount = count(tickets.id)
+      .mapWith(Number)
+      .as('tickets_sold');
+
+    // Aggregate monthly sales and ticket counts directly in the database
+    const monthlyAggregations = await db
+      .select({
+        year: yearCol,
+        month: monthCol,
+        totalSalesCents: totalSalesCol,
+        ticketsSold: ticketsSoldCount,
+      })
       .from(orders)
-      .where(eq(orders.status, 'completed'));
+      .innerJoin(orderItems, eq(orders.id, orderItems.orderId))
+      .innerJoin(tickets, eq(orderItems.ticketId, tickets.id))
+      .where(
+        and(
+          eq(orders.status, 'completed'),
+          gte(orders.createdAt, startDate), // Filter by date range
+          lte(orders.createdAt, currentDate),
+        ),
+      )
+      .groupBy(yearCol, monthCol) // Group by year and month
+      .orderBy(yearCol, monthCol); // Order chronologically
 
     // Create month buckets for the last 12 months
-    const monthlyRevenue: MonthlyRevenueData[] = new Array(12)
-      .fill(0)
-      .map((_, index) => {
-        const date = new Date(startDate);
-        date.setMonth(startDate.getMonth() + index);
-        return {
-          month: date.toLocaleString('default', { month: 'short' }),
-          year: date.getFullYear(),
-          revenue: 0,
-          totalSales: 0,
-          ticketsSold: 0,
-        };
+    const monthNames = [
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec',
+    ];
+    const monthlyRevenueMap = new Map<string, MonthlyRevenueData>();
+
+    for (let i = 0; i < 12; i++) {
+      const date = new Date(startDate);
+      date.setMonth(startDate.getMonth() + i);
+      const year = date.getFullYear();
+      const monthIndex = date.getMonth(); // 0-based index
+      const monthKey = `${year}-${monthIndex + 1}`; // Key like "2024-5"
+
+      monthlyRevenueMap.set(monthKey, {
+        month: monthNames[monthIndex],
+        year: year,
+        revenue: 0,
+        totalSales: 0,
+        ticketsSold: 0,
       });
-
-    // Get order IDs for completed orders
-    const orderIds = completedOrders.map((order) => order.id);
-
-    if (orderIds.length > 0) {
-      // Process order IDs in batches to avoid exceeding parameter limits
-      const BATCH_SIZE = 1000; // Process 1000 orders at a time
-
-      for (let i = 0; i < orderIds.length; i += BATCH_SIZE) {
-        const batchOrderIds = orderIds.slice(i, i + BATCH_SIZE);
-
-        // Get all order items and related tickets for this batch
-        const orderItemsWithTickets = await db
-          .select({
-            orderItem: orderItems,
-            ticket: tickets,
-            order: orders,
-          })
-          .from(orderItems)
-          .leftJoin(tickets, eq(orderItems.ticketId, tickets.id))
-          .leftJoin(orders, eq(orderItems.orderId, orders.id))
-          .where(inArray(orderItems.orderId, batchOrderIds));
-
-        // Process each order item in this batch
-        orderItemsWithTickets.forEach((item) => {
-          if (item.order && item.order.createdAt && item.ticket) {
-            const orderDate = new Date(item.order.createdAt);
-
-            // Only include orders from the last 12 months
-            if (orderDate >= startDate && orderDate <= currentDate) {
-              // Calculate which month bucket this belongs to
-              const monthDiff =
-                (orderDate.getFullYear() - startDate.getFullYear()) * 12 +
-                (orderDate.getMonth() - startDate.getMonth());
-
-              if (monthDiff >= 0 && monthDiff < 12) {
-                // Add ticket price to total sales for this month
-                const ticketPrice = item.ticket.price || 0;
-                monthlyRevenue[monthDiff].totalSales += ticketPrice / 100; // Convert cents to dollars
-                monthlyRevenue[monthDiff].ticketsSold += 1;
-
-                // Calculate platform revenue
-                monthlyRevenue[monthDiff].revenue +=
-                  (ticketPrice / 100) * (platformFeePercentage / 100);
-              }
-            }
-          }
-        });
-      }
     }
 
-    // Round values to 2 decimal places
-    monthlyRevenue.forEach((month) => {
-      month.revenue = parseFloat(month.revenue.toFixed(2));
-      month.totalSales = parseFloat(month.totalSales.toFixed(2));
+    // Populate the map with aggregated data
+    monthlyAggregations.forEach((agg) => {
+      const monthKey = `${agg.year}-${agg.month}`;
+      const monthData = monthlyRevenueMap.get(monthKey);
+
+      if (monthData) {
+        const totalSales = (agg.totalSalesCents || 0) / 100; // Convert cents to dollars
+        monthData.totalSales = parseFloat(totalSales.toFixed(2));
+        monthData.ticketsSold = agg.ticketsSold || 0;
+        monthData.revenue = parseFloat(
+          (totalSales * (platformFeePercentage / 100)).toFixed(2),
+        );
+      }
     });
 
-    // Cache the data before returning
-    await cacheMonthlyRevenueData(monthlyRevenue);
+    // Convert map values to array, ensuring chronological order
+    const finalMonthlyRevenue = Array.from(monthlyRevenueMap.values());
 
-    return monthlyRevenue;
+    // Cache the data before returning
+    await cacheMonthlyRevenueData(finalMonthlyRevenue);
+
+    return finalMonthlyRevenue;
   } catch (error) {
     logger.error(`Error fetching monthly revenue data: ${error}`);
-    throw error;
+    if (error instanceof Error) {
+      logger.error(`Stack trace: ${error.stack}`);
+    }
+    throw new Error(`Failed to fetch monthly revenue data: ${error}`);
   }
 }
 
 /**
- * Get user growth data for the past year
+ * Get user growth data for the past year (Optimized)
  */
 export async function getUserGrowthData(): Promise<UserGrowthData[]> {
   try {
@@ -866,83 +796,112 @@ export async function getUserGrowthData(): Promise<UserGrowthData[]> {
       'User growth data not found in cache, fetching from database...',
     );
 
-    // Get the current date and create a date for 12 months ago
     const currentDate = new Date();
     const startDate = new Date(currentDate);
     startDate.setMonth(startDate.getMonth() - 11);
-    startDate.setDate(1); // Start from the 1st day of the month
+    startDate.setDate(1);
     startDate.setHours(0, 0, 0, 0);
 
-    // Get all users
-    const allUsers = await db.select().from(users);
+    // Use sql template literal for date extraction
+    const yearCol = sql<number>`EXTRACT(YEAR FROM ${users.createdAt})`.as(
+      'year',
+    );
+    const monthCol = sql<number>`EXTRACT(MONTH FROM ${users.createdAt})`.as(
+      'month',
+    );
+    const newUserCountCol = count(users.id).mapWith(Number).as('new_users');
 
-    // Create month buckets for the last 12 months
-    const monthlyGrowth: UserGrowthData[] = new Array(12)
-      .fill(0)
-      .map((_, index) => {
-        const date = new Date(startDate);
-        date.setMonth(startDate.getMonth() + index);
-        return {
-          month: date.toLocaleString('default', { month: 'short' }),
-          year: date.getFullYear(),
-          newUsers: 0,
-          totalUsers: 0,
-        };
+    // Aggregate new users per month in the database
+    const monthlyNewUsers = await db
+      .select({
+        year: yearCol,
+        month: monthCol,
+        newUsers: newUserCountCol,
+      })
+      .from(users)
+      .where(gte(users.createdAt, startDate)) // Filter users created within the last 12 months
+      .groupBy(yearCol, monthCol)
+      .orderBy(yearCol, monthCol);
+
+    // Count users created before the start date
+    const usersBeforeStartDateCount = await db
+      .select({ count: count(users.id) })
+      .from(users)
+      .where(lt(users.createdAt, startDate)) // Use lt for less than
+      .then((result) => result[0]?.count || 0);
+
+    // Create month buckets and calculate cumulative totals
+    const monthNames = [
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec',
+    ];
+    const monthlyGrowthMap = new Map<string, UserGrowthData>();
+    let cumulativeCount = usersBeforeStartDateCount;
+
+    for (let i = 0; i < 12; i++) {
+      const date = new Date(startDate);
+      date.setMonth(startDate.getMonth() + i);
+      const year = date.getFullYear();
+      const monthIndex = date.getMonth(); // 0-based
+      const monthKey = `${year}-${monthIndex + 1}`;
+
+      monthlyGrowthMap.set(monthKey, {
+        month: monthNames[monthIndex],
+        year: year,
+        newUsers: 0,
+        totalUsers: 0, // Will be calculated later
       });
+    }
 
-    // Calculate cumulative user count for each month
-    let cumulativeCount = 0;
-
-    // First, count users who registered before the start date
-    const usersBeforeStartDate = allUsers.filter(
-      (user) => user.createdAt && new Date(user.createdAt) < startDate,
-    ).length;
-
-    cumulativeCount = usersBeforeStartDate;
-
-    // Process each user
-    allUsers.forEach((user) => {
-      if (user.createdAt) {
-        const registrationDate = new Date(user.createdAt);
-
-        // Only include users from the last 12 months
-        if (registrationDate >= startDate && registrationDate <= currentDate) {
-          // Calculate which month bucket this belongs to
-          const monthDiff =
-            (registrationDate.getFullYear() - startDate.getFullYear()) * 12 +
-            (registrationDate.getMonth() - startDate.getMonth());
-
-          if (monthDiff >= 0 && monthDiff < 12) {
-            // Increment new user count for this month
-            monthlyGrowth[monthDiff].newUsers += 1;
-          }
-        }
+    // Populate new users and calculate cumulative totals
+    monthlyNewUsers.forEach((row) => {
+      const monthKey = `${row.year}-${row.month}`;
+      if (monthlyGrowthMap.has(monthKey)) {
+        monthlyGrowthMap.get(monthKey)!.newUsers = row.newUsers;
       }
     });
 
-    // Calculate cumulative totals
-    for (let i = 0; i < monthlyGrowth.length; i++) {
-      cumulativeCount += monthlyGrowth[i].newUsers;
-      monthlyGrowth[i].totalUsers = cumulativeCount;
+    // Calculate cumulative totals chronologically
+    const finalMonthlyGrowth: UserGrowthData[] = [];
+    for (let i = 0; i < 12; i++) {
+      const date = new Date(startDate);
+      date.setMonth(startDate.getMonth() + i);
+      const year = date.getFullYear();
+      const monthIndex = date.getMonth();
+      const monthKey = `${year}-${monthIndex + 1}`;
+      const monthData = monthlyGrowthMap.get(monthKey)!;
+
+      cumulativeCount += monthData.newUsers;
+      monthData.totalUsers = cumulativeCount;
+      finalMonthlyGrowth.push(monthData);
     }
 
     // Cache the data before returning
-    await cacheUserGrowthData(monthlyGrowth);
+    await cacheUserGrowthData(finalMonthlyGrowth);
 
-    return monthlyGrowth;
+    logger.info('Successfully fetched and calculated user growth data');
+    return finalMonthlyGrowth;
   } catch (error) {
     logger.error(`Error fetching user growth data: ${error}`);
-    throw error;
+    // Throw a generic error
+    throw new Error(`Failed to fetch user growth data: ${error}`);
   }
 }
 
-// Define a temporary type for monthStat including totalCapacity
-interface MonthlyStatWithCapacity extends EventStatistics {
-  totalCapacity: number;
-}
+// Define a temporary type for monthStat including totalCapacity - REMOVED as it's no longer needed here
 
 /**
- * Get event statistics for the past year
+ * Get event statistics for the past year (Optimized)
  */
 export async function getEventStatistics(): Promise<EventStatistics[]> {
   try {
@@ -957,7 +916,6 @@ export async function getEventStatistics(): Promise<EventStatistics[]> {
       'Event statistics not found in cache, fetching from database...',
     );
 
-    // Get the current date and create a date for 12 months ago
     const currentDate = new Date();
     const startDate = new Date(currentDate);
     startDate.setMonth(startDate.getMonth() - 11);
@@ -979,123 +937,128 @@ export async function getEventStatistics(): Promise<EventStatistics[]> {
       'Dec',
     ];
 
-    // Create month buckets for the last 12 months
-    const monthlyStats: MonthlyStatWithCapacity[] = new Array(12)
-      .fill(0)
-      .map((_, index) => {
-        const monthDate = new Date(startDate);
-        monthDate.setMonth(startDate.getMonth() + index);
-        return {
-          month: monthNames[monthDate.getMonth()],
-          year: monthDate.getFullYear(),
-          newEvents: 0,
-          ticketsSold: 0,
-          averageTicketsPerEvent: 0,
-          eventOccupancyRate: 0, // Initialize occupancy rate
-          totalCapacity: 0, // Add total capacity for calculation
-        };
-      });
+    // Use sql template literal for date extraction
+    const eventYearCol =
+      sql<number>`EXTRACT(YEAR FROM ${events.startTimestamp})`.as('event_year');
+    const eventMonthCol =
+      sql<number>`EXTRACT(MONTH FROM ${events.startTimestamp})`.as(
+        'event_month',
+      );
 
-    // Fetch all relevant events within the 12-month range
-    const relevantEvents = await db
+    // Aggregate event counts and total capacity per month
+    const monthlyEventStats = await db
       .select({
-        id: events.id,
-        startTimestamp: events.startTimestamp,
-        capacity: events.capacity,
+        year: eventYearCol,
+        month: eventMonthCol,
+        newEvents: count(events.id).mapWith(Number),
+        totalCapacity: sum(
+          sql<number>`COALESCE(${events.capacity}, 0)`,
+        ).mapWith(Number),
       })
       .from(events)
       .where(
         and(
           gte(events.startTimestamp, startDate),
           lte(events.startTimestamp, currentDate),
-          eq(events.status, 'published'), // Consider only published events for stats
-        ),
-      );
-
-    if (relevantEvents.length === 0) {
-      logger.info('No relevant events found in the last 12 months.');
-      // Remove totalCapacity before caching/returning - Corrected: removed unused destructuring
-      const finalStats = monthlyStats.map(
-        ({ totalCapacity: _unused, ...rest }) => rest,
-      );
-      await cacheEventStatistics(finalStats);
-      return finalStats;
-    }
-
-    const eventIds = relevantEvents.map((e) => e.id);
-
-    // Fetch tickets sold for these events
-    const ticketsSoldData = await db
-      .select({
-        eventId: tickets.eventId,
-        count: count(tickets.id),
-        eventTimestamp: events.startTimestamp, // Include timestamp for grouping
-      })
-      .from(tickets)
-      .leftJoin(events, eq(tickets.eventId, events.id)) // Join to get event timestamp
-      .where(
-        and(
-          inArray(tickets.eventId, eventIds),
-          eq(tickets.status, 'booked'), // Count only booked tickets
+          eq(events.status, 'published'), // Consider only published events
         ),
       )
-      .groupBy(sql`${tickets.eventId}`, sql`${events.startTimestamp}`); // Use sql helper for groupBy
+      .groupBy(eventYearCol, eventMonthCol)
+      .orderBy(eventYearCol, eventMonthCol);
 
-    // Map tickets sold to event IDs for easier lookup
-    const ticketsSoldMap = new Map<string, number>();
-    ticketsSoldData.forEach((item) => {
-      if (item.eventId) {
-        ticketsSoldMap.set(item.eventId, item.count);
+    // Aggregate tickets sold per month based on event start date range
+    const monthlyTicketStats = await db
+      .select({
+        year: eventYearCol, // Group by event's month/year
+        month: eventMonthCol,
+        ticketsSold: count(tickets.id).mapWith(Number),
+      })
+      .from(tickets)
+      .innerJoin(events, eq(tickets.eventId, events.id)) // Join to filter by event date range and status
+      .where(
+        and(
+          eq(tickets.status, 'booked'),
+          gte(events.startTimestamp, startDate), // Ensure event is within the range
+          lte(events.startTimestamp, currentDate),
+          eq(events.status, 'published'), // Ensure event is published
+          // Optional: Filter tickets by bookedAt as well if needed
+          // gte(tickets.bookedAt, startDate),
+          // lte(tickets.bookedAt, currentDate),
+        ),
+      )
+      .groupBy(eventYearCol, eventMonthCol) // Group by event's month/year
+      .orderBy(eventYearCol, eventMonthCol);
+
+    // Create month buckets and combine results
+    const finalStatsMap = new Map<
+      string,
+      EventStatistics & { totalCapacity: number }
+    >();
+
+    for (let i = 0; i < 12; i++) {
+      const date = new Date(startDate);
+      date.setMonth(startDate.getMonth() + i);
+      const year = date.getFullYear();
+      const monthIndex = date.getMonth(); // 0-based
+      const monthKey = `${year}-${monthIndex + 1}`;
+
+      finalStatsMap.set(monthKey, {
+        month: monthNames[monthIndex],
+        year: year,
+        newEvents: 0,
+        ticketsSold: 0,
+        averageTicketsPerEvent: 0,
+        eventOccupancyRate: 0,
+        totalCapacity: 0, // Temporary field
+      });
+    }
+
+    // Populate event stats
+    monthlyEventStats.forEach((row) => {
+      const monthKey = `${row.year}-${row.month}`;
+      if (finalStatsMap.has(monthKey)) {
+        const monthData = finalStatsMap.get(monthKey)!;
+        monthData.newEvents = row.newEvents;
+        monthData.totalCapacity = row.totalCapacity || 0; // Ensure capacity is a number
       }
     });
 
-    // Process events and aggregate stats by month
-    relevantEvents.forEach((event) => {
-      if (!event.startTimestamp) return; // Skip if no start timestamp
-      const eventDate = new Date(event.startTimestamp);
-      const monthIndex =
-        (eventDate.getFullYear() - startDate.getFullYear()) * 12 +
-        eventDate.getMonth() -
-        startDate.getMonth();
-
-      if (monthIndex >= 0 && monthIndex < 12) {
-        const monthStat = monthlyStats[monthIndex];
-        monthStat.newEvents += 1;
-        const soldCount = ticketsSoldMap.get(event.id) || 0;
-        monthStat.ticketsSold += soldCount;
-        // Add event capacity to the month's total capacity
-        monthStat.totalCapacity += event.capacity || 0; // Use 0 if capacity is null/undefined
+    // Populate ticket stats
+    monthlyTicketStats.forEach((row) => {
+      const monthKey = `${row.year}-${row.month}`;
+      if (finalStatsMap.has(monthKey)) {
+        finalStatsMap.get(monthKey)!.ticketsSold = row.ticketsSold;
       }
     });
 
-    // Calculate average tickets and occupancy rate for each month
-    monthlyStats.forEach((monthStat) => {
+    // Calculate derived metrics
+    finalStatsMap.forEach((monthStat) => {
       if (monthStat.newEvents > 0) {
-        monthStat.averageTicketsPerEvent = Math.round(
-          monthStat.ticketsSold / monthStat.newEvents,
+        monthStat.averageTicketsPerEvent = parseFloat(
+          (monthStat.ticketsSold / monthStat.newEvents).toFixed(2),
         );
       }
       if (monthStat.totalCapacity > 0) {
         monthStat.eventOccupancyRate = parseFloat(
           ((monthStat.ticketsSold / monthStat.totalCapacity) * 100).toFixed(2),
         );
-      } else {
-        // Handle case where total capacity is 0 (e.g., no events or events with 0 capacity)
-        monthStat.eventOccupancyRate = 0;
       }
     });
 
-    // Remove temporary totalCapacity field before returning/caching - Corrected: removed unused destructuring
-    const finalStats: EventStatistics[] = monthlyStats.map(
-      ({ totalCapacity: _unused, ...rest }) => rest,
-    );
+    // Convert map to array and remove temporary field
+    const finalStats: EventStatistics[] = Array.from(
+      finalStatsMap.values(),
+    ).map(({ totalCapacity: _unusedCapacity, ...rest }) => rest);
 
     // Cache the data before returning
     await cacheEventStatistics(finalStats);
-
+    logger.info('Successfully fetched and calculated event statistics');
     return finalStats;
   } catch (error) {
     logger.error(`Error fetching event statistics: ${error}`);
-    throw error;
+    if (error instanceof Error) {
+      logger.error(`Stack trace: ${error.stack}`);
+    }
+    throw new Error(`Failed to fetch event statistics: ${error}`);
   }
 }
