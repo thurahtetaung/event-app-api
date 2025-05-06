@@ -819,16 +819,18 @@ export async function handleSuccessfulPayment(
   }
 }
 
-export async function handleFailedPayment(paymentIntentId: string) {
+export async function handleFailedPayment(PaymentIntent) {
   try {
+    logger.info(`Handling failed payment for payment ${PaymentIntent.id}`);
+    // Get the orderid from the payment intent metadata
+    const orderId = PaymentIntent.metadata.orderId;
     return await db.transaction(async (tx) => {
       // Get the order
       const [order] = await tx
         .select()
         .from(orders)
-        .where(eq(orders.stripePaymentIntentId, paymentIntentId))
+        .where(eq(orders.id, orderId))
         .limit(1);
-
       if (!order) {
         throw new Error('Order not found');
       }
@@ -860,6 +862,38 @@ export async function handleFailedPayment(paymentIntentId: string) {
     });
   } catch (error) {
     logger.error(`Error handling failed payment: ${error}`);
+    throw error;
+  }
+}
+
+export async function handleCanceledPayment(paymentIntentId: string) {
+  try {
+    return await db.transaction(async (tx) => {
+      // Get the order
+      const [order] = await tx
+        .select()
+        .from(orders)
+        .where(eq(orders.stripePaymentIntentId, paymentIntentId))
+        .limit(1);
+
+      if (!order) {
+        throw new Error('Order not found');
+      }
+
+      // Update order status
+      const [updatedOrder] = await tx
+        .update(orders)
+        .set({
+          status: 'cancelled',
+          updatedAt: new Date(),
+        })
+        .where(eq(orders.id, order.id))
+        .returning();
+
+      return updatedOrder;
+    });
+  } catch (error) {
+    logger.error(`Error handling canceled payment: ${error}`);
     throw error;
   }
 }

@@ -9,6 +9,7 @@ import { getPlatformConfigByKey } from '../platform-configurations/platform-conf
 import {
   handleSuccessfulPayment,
   handleFailedPayment,
+  handleCanceledPayment,
 } from '../tickets/tickets.services';
 import {
   AppError,
@@ -408,6 +409,22 @@ export async function handleStripeWebhook(
         break;
       }
 
+      case 'checkout.session.expired': {
+        const session = event.data.object as Stripe.Checkout.Session;
+        logger.info(
+          `Processing checkout session expired event for session ${session.id}`,
+        );
+        // Handle session expiration (e.g., update order status)
+        await db
+          .update(orders)
+          .set({
+            status: 'cancelled',
+            updatedAt: new Date(),
+          })
+          .where(eq(orders.stripeCheckoutSessionId, session.id));
+        break;
+      }
+
       case 'payment_intent.succeeded': {
         const paymentIntent = event.data.object as Stripe.PaymentIntent;
         logger.info(
@@ -420,12 +437,21 @@ export async function handleStripeWebhook(
         break;
       }
 
-      case 'payment_intent.payment_failed': {
+      // case 'payment_intent.payment_failed': {
+      //   const paymentIntent = event.data.object as Stripe.PaymentIntent;
+      //   logger.info(
+      //     `Processing failed payment event for payment ${paymentIntent.id}`,
+      //   );
+      //   await handleFailedPayment(paymentIntent);
+      //   break;
+      // }
+
+      case 'payment_intent.canceled': {
         const paymentIntent = event.data.object as Stripe.PaymentIntent;
         logger.info(
-          `Processing failed payment event for payment ${paymentIntent.id}`,
+          `Processing canceled payment event for payment ${paymentIntent.id}`,
         );
-        await handleFailedPayment(paymentIntent.id);
+        await handleCanceledPayment(paymentIntent.id);
         break;
       }
 
