@@ -276,7 +276,8 @@ export async function loginUser(data: {
       // DO NOT send another OTP here to avoid rate-limiting.
       // Just inform the client that registration is pending.
       throw new UnauthorizedError(
-        'Please complete your registration by verifying your email. An OTP may have already been sent to your email address. (REGISTRATION_PENDING)',
+        'Please complete your registration by verifying your email. An OTP may have already been sent to your email address.',
+        'REGISTRATION_PENDING', // Explicitly set the error code
       );
     }
 
