@@ -24,14 +24,6 @@ import jwt from 'jsonwebtoken';
 // Define User type from schema
 type User = typeof users.$inferSelect;
 
-// Define minimal types for Supabase auth responses if not exported from the module
-type SupabaseAuthUser = { id: string; [key: string]: unknown }; // Changed any to unknown
-type SupabaseAuthSession = {
-  access_token: string;
-  refresh_token: string;
-  [key: string]: unknown; // Changed any to unknown
-};
-
 // Define return types for functions that return user or array of users
 type UserResponse = User | undefined;
 type UsersResponse = User[];
@@ -63,7 +55,7 @@ export async function registerUser(
     logger.info(`Now requesting OTP for user: ${data.email}`);
     // Send the OTP
     const otpResponse = await requestOTP(data.email, { role: data.role });
-    logger.info(`OTP response: ${JSON.stringify(otpResponse)}`); // Log the full response for clarity
+    logger.info(`OTP response: ${JSON.stringify(otpResponse)}`);
     return result;
   } catch (e: unknown) {
     // Changed to unknown for better type safety
@@ -112,10 +104,7 @@ export async function verifyRegistration(
 ): Promise<VerifyRegistrationResult> {
   try {
     // First verify the OTP
-    const supabaseUserResponse = (await verifyOTP(data.email, data.otp)) as {
-      user: SupabaseAuthUser;
-      session: SupabaseAuthSession;
-    }; // Renamed for clarity and typed
+    const supabaseUserResponse = await verifyOTP(data.email, data.otp);
     if (!supabaseUserResponse.user || !supabaseUserResponse.session) {
       throw new ValidationError('Invalid or expired OTP');
     }
@@ -271,10 +260,6 @@ export async function loginUser(data: {
     }
 
     if (!user.verified) {
-      // OTP is assumed to have been sent by Supabase automatically upon login attempt for an unverified user,
-      // or during the initial registration process.
-      // DO NOT send another OTP here to avoid rate-limiting.
-      // Just inform the client that registration is pending.
       throw new UnauthorizedError(
         'Please complete your registration by verifying your email. An OTP may have already been sent to your email address.',
         'REGISTRATION_PENDING', // Explicitly set the error code
@@ -305,7 +290,7 @@ export async function verifyLogin(data: {
   otp: string;
 }): Promise<VerifyLoginResult> {
   try {
-    const userQuery = await db // Renamed
+    const userQuery = await db
       .select()
       .from(users)
       .where(eq(users.email, data.email))
@@ -314,7 +299,7 @@ export async function verifyLogin(data: {
     if (userQuery.length === 0) {
       throw new NotFoundError('User not found');
     }
-    const user = userQuery[0]; // Assign
+    const user = userQuery[0];
 
     if (user.status === 'inactive' || user.status === 'banned') {
       const statusMessage =
@@ -348,10 +333,7 @@ export async function verifyLogin(data: {
       logger.info(`Seeded user login successful for: ${user.email}`);
       return { access_token, refresh_token, user };
     } else {
-      const verifyResult = (await verifyOTP(data.email, data.otp)) as {
-        user: SupabaseAuthUser;
-        session: SupabaseAuthSession;
-      }; // Typed
+      const verifyResult = await verifyOTP(data.email, data.otp);
       if (!verifyResult || !verifyResult.session) {
         throw new ValidationError('Invalid or expired OTP');
       }
@@ -377,7 +359,7 @@ export async function resendRegistrationOTP(data: {
   email: string;
 }): Promise<ResendOTPResponse> {
   try {
-    const userQuery = await db // Renamed
+    const userQuery = await db
       .select({
         id: users.id,
         email: users.email,
@@ -391,7 +373,7 @@ export async function resendRegistrationOTP(data: {
     if (userQuery.length === 0) {
       throw new NotFoundError('User not found');
     }
-    const user = userQuery[0]; // Assign
+    const user = userQuery[0];
     if (user.verified) {
       throw new ValidationError('User is already verified');
     }
@@ -417,7 +399,7 @@ export async function resendLoginOTP(data: {
   email: string;
 }): Promise<ResendLoginOTPResponse> {
   try {
-    const userQuery = await db // Renamed
+    const userQuery = await db
       .select({
         id: users.id,
         email: users.email,
@@ -430,7 +412,7 @@ export async function resendLoginOTP(data: {
     if (userQuery.length === 0) {
       throw new NotFoundError('User not found');
     }
-    const user = userQuery[0]; // Assign
+    const user = userQuery[0];
     if (!user.verified) {
       throw new UnauthorizedError('User not verified');
     }
@@ -455,7 +437,7 @@ interface DecodedJwt {
   id: string;
   email: string;
   role: string;
-  type?: string; // Make type optional as it's only for seeded user refresh tokens
+  type?: string;
 }
 
 export async function refreshToken(
@@ -475,7 +457,7 @@ export async function refreshToken(
           .limit(1);
         if (userQuery.length === 0)
           throw new UnauthorizedError('User not found');
-        const user = userQuery[0]; // Assign
+        const user = userQuery[0];
 
         if (!user.supabaseUserId?.startsWith('sb_'))
           throw new UnauthorizedError('Not a seeded user');
@@ -507,9 +489,7 @@ export async function refreshToken(
       }
     }
 
-    const session = (await refreshSession(
-      refreshToken,
-    )) as SupabaseAuthSession | null; // Type Supabase session
+    const session = await refreshSession(refreshToken);
 
     if (!session) {
       logger.error('No session returned after refresh from Supabase');
