@@ -819,7 +819,12 @@ export async function handleSuccessfulPayment(
   }
 }
 
-export async function handleFailedPayment(PaymentIntent) {
+export async function handleFailedPayment(PaymentIntent: {
+  id: string;
+  metadata: {
+    orderId: string;
+  };
+}) {
   try {
     logger.info(`Handling failed payment for payment ${PaymentIntent.id}`);
     // Get the orderid from the payment intent metadata
