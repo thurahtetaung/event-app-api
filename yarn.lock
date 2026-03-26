@@ -551,10 +551,10 @@
     "@eslint/core" "^0.10.0"
     levn "^0.4.1"
 
-"@faker-js/faker@^9.6.0":
-  version "9.6.0"
-  resolved "https://registry.yarnpkg.com/@faker-js/faker/-/faker-9.6.0.tgz#64235d20330b142eef3d1d1638ba56c083b4bf1d"
-  integrity sha512-3vm4by+B5lvsFPSyep3ELWmZfE3kicDtmemVpuwl1yH7tqtnHdsA6hG8fbXedMVdkzgtvzWoRgjSB4Q+FHnZiw==
+"@faker-js/faker@^10.3.0":
+  version "10.3.0"
+  resolved "https://registry.yarnpkg.com/@faker-js/faker/-/faker-10.3.0.tgz#d56b68e4f1dd090152029fe91d2f8505389947f2"
+  integrity sha512-It0Sne6P3szg7JIi6CgKbvTZoMjxBZhcv91ZrqrNuaZQfB5WoqYYbzCUOq89YR+VY8juY9M1vDWmDDa2TzfXCw==
 
 "@fastify/accept-negotiator@^1.0.0":
   version "1.1.0"
