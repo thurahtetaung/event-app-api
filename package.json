@@ -21,7 +21,7 @@
     "globals": "~15.14",
     "prettier": "~3.8",
     "rimraf": "~6.0",
-    "ts-api-utils": "~2.0",
+    "ts-api-utils": "~2.5",
     "tsx": "^4.19.2",
     "typescript": "~5.7.3",
     "typescript-eslint": "~8.62",
