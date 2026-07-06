@@ -13,7 +13,7 @@
     "@types/node": "~22",
     "@types/pg": "^8.11.10",
     "@types/uuid": "^10.0.0",
-    "@typescript-eslint/parser": "~8.19",
+    "@typescript-eslint/parser": "~8.62",
     "date-fns": "^4.1.0",
     "drizzle-kit": "^0.30.1",
     "eslint": "~9.17",
